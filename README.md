@@ -1,4 +1,4 @@
-# Equipment Utilization & Activity Classification Prototype
+# Technical Construction Equipment Tracking and Monitoring System
 
 A real-time microservices pipeline for construction equipment monitoring using computer vision, Apache Kafka event streaming, and a Streamlit dashboard. This prototype detects, tracks, and classifies equipment activity states (DIGGING, SWINGING_LOADING, DUMPING, WAITING) from video feeds, providing live utilization metrics.
 

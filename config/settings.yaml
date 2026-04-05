@@ -1,4 +1,4 @@
-# Equipment Utilization & Activity Classification - Configuration
+# Technical Construction Equipment Tracking and Monitoring System - Configuration
 
 video:
   frame_skip: 3              # Process every Nth frame for CPU performance
@@ -55,4 +55,4 @@ database:
 dashboard:
   api_url: "http://analytics-backend:8000"
   refresh_interval: 1         # seconds
-  page_title: "Equipment Utilization Monitor"
+  page_title: "Technical Construction Equipment Tracking & Monitoring System"

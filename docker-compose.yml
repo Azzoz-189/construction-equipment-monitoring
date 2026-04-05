@@ -1,3 +1,4 @@
+# Technical Construction Equipment Tracking and Monitoring System
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0

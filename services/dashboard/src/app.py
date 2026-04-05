@@ -967,7 +967,7 @@ def main():
     """Main application entry point."""
     # Page configuration
     st.set_page_config(
-        page_title="EagleVision Monitoring System",
+        page_title="Technical Construction Equipment Tracking & Monitoring System",
         page_icon="🎯",
         layout="wide",
         initial_sidebar_state="expanded",

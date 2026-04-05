@@ -1,32 +1,60 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 *.egg-info/
 dist/
 build/
-.eggs/
 *.egg
-
-# Virtual environments
+.eggs/
 venv/
-.env
-
-# Videos (large files)
-videos/*.mp4
-videos/*.avi
-videos/*.mkv
+env/
+.venv/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Docker
+postgres-data/
+
+# Video files (large, not for git)
+videos/*.mp4
+videos/*.webm
+videos/*.avi
+videos/*.mkv
+videos/*.mov
+videos/*.flv
+videos/*.f136.*
+videos/*.f398.*
+videos/*.f302.*
+videos/*.f251.*
+
+# Frames output
+frames/*
+!frames/.gitkeep
+
+# Environment
+.env
 *.log
 
-# Model weights
+# Qoder
+.qoder/
+
+# Task screenshots and temp files
+*.png
+!Task_Part*.png
+extracted_content.txt
+
+# Model weights (downloaded at runtime)
 *.pt
 *.onnx
