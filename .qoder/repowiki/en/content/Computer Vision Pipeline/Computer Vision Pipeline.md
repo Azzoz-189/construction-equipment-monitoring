@@ -17,22 +17,36 @@
 - [test_time_tracker.py](file://tests/test_time_tracker.py)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Enhanced video processing capabilities with ffmpeg fallback mechanisms for unsupported codecs
+- Added dynamic video channel switching through control files
+- Implemented frame history management with MAX_FRAME_HISTORY controls
+- Improved frame skipping with effective FPS calculation
+- Added comprehensive error handling throughout the pipeline
+- Enhanced frame annotation and visualization capabilities
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Enhanced Video Processing Pipeline](#enhanced-video-processing-pipeline)
+7. [Dynamic Video Channel Management](#dynamic-video-channel-management)
+8. [Frame History and Memory Management](#frame-history-and-memory-management)
+9. [Dependency Analysis](#dependency-analysis)
+10. [Performance Considerations](#performance-considerations)
+11. [Troubleshooting Guide](#troubleshooting-guide)
+12. [Conclusion](#conclusion)
+13. [Appendices](#appendices)
 
 ## Introduction
 This document explains the computer vision processing pipeline that powers equipment monitoring. The pipeline performs multi-stage processing on video streams to detect, track, and classify construction equipment activities in real time. It integrates YOLOv8 object detection, ByteTrack multi-object tracking, region-based optical flow analysis, rule-based activity classification, and utilization time tracking. The pipeline publishes structured events to Apache Kafka for downstream analytics and dashboard consumption.
 
 The pipeline is designed for CPU-only environments with aggressive optimizations (frame skipping, resizing, and lightweight models) to enable real-time processing on modest hardware. It uses a zero-shot approach for detection (COCO classes mapped to construction vehicles) and a region-based optical flow technique to distinguish articulated motion (e.g., excavator arm) from whole-body motion.
+
+**Updated** Enhanced with advanced video processing capabilities including ffmpeg fallback mechanisms, dynamic video channel switching, and comprehensive error handling for production-grade reliability.
 
 ## Project Structure
 The pipeline is implemented as a modular Python service with clear separation of concerns. The central orchestrator coordinates all stages, while specialized modules handle detection, tracking, motion analysis, classification, and time accounting. Configuration is centralized in a YAML file, and events are streamed to Kafka for persistence and visualization.
@@ -47,19 +61,25 @@ MA["motion_analyzer.py<br/>Region-based OF"]
 AC["activity_classifier.py<br/>Rule-based Classifier"]
 TT["time_tracker.py<br/>Utilization Timer"]
 KP["kafka_producer.py<br/>Event Publisher"]
+FH["Frame History<br/>Management"]
+VC["Video Control<br/>System"]
 end
 subgraph "External Systems"
 K["Apache Kafka"]
 P["PostgreSQL + TimescaleDB"]
 DB["Dashboard (Streamlit)"]
+FF["FFmpeg<br/>Fallback"]
 end
 M --> D --> T --> MA --> AC --> TT --> KP --> K
+M --> FH
+M --> VC
+M --> FF
 K --> P
 P --> DB
 ```
 
 **Diagram sources**
-- [main.py:42-498](file://services/cv_service/src/main.py#L42-L498)
+- [main.py:48-721](file://services/cv_service/src/main.py#L48-L721)
 - [detector.py:18-170](file://services/cv_service/src/detector.py#L18-L170)
 - [tracker.py:19-341](file://services/cv_service/src/tracker.py#L19-L341)
 - [motion_analyzer.py:24-442](file://services/cv_service/src/motion_analyzer.py#L24-L442)
@@ -82,6 +102,8 @@ This section outlines the five core stages of the pipeline and their roles:
 
 Each stage produces structured outputs consumed by the next stage, culminating in Kafka events enriched with time analytics.
 
+**Updated** Enhanced with video processing orchestration, dynamic channel management, and frame history controls.
+
 **Section sources**
 - [detector.py:18-170](file://services/cv_service/src/detector.py#L18-L170)
 - [tracker.py:19-341](file://services/cv_service/src/tracker.py#L19-L341)
@@ -96,6 +118,7 @@ The pipeline is orchestrated by a single entry point that iterates frames, appli
 sequenceDiagram
 participant V as "Video Source"
 participant O as "CVServicePipeline"
+participant FF as "FFmpeg Fallback"
 participant DET as "EquipmentDetector"
 participant TRK as "EquipmentTracker"
 participant MA as "MotionAnalyzer"
@@ -103,6 +126,13 @@ participant AC as "ActivityClassifier"
 participant TT as "TimeTracker"
 participant KP as "KafkaProducer"
 V->>O : "Next frame"
+O->>O : "Check codec support"
+alt OpenCV can decode
+O->>DET : "detect(frame)"
+else Unsupported codec
+O->>FF : "Process via ffmpeg"
+FF-->>O : "Decoded frames"
+end
 O->>DET : "detect(frame)"
 DET-->>O : "detections"
 O->>TRK : "update(detections, frame)"
@@ -118,7 +148,7 @@ KP-->>O : "ack"
 ```
 
 **Diagram sources**
-- [main.py:323-421](file://services/cv_service/src/main.py#L323-L421)
+- [main.py:229-395](file://services/cv_service/src/main.py#L229-L395)
 - [detector.py:85-170](file://services/cv_service/src/detector.py#L85-L170)
 - [tracker.py:159-265](file://services/cv_service/src/tracker.py#L159-L265)
 - [motion_analyzer.py:88-167](file://services/cv_service/src/motion_analyzer.py#L88-L167)
@@ -259,6 +289,90 @@ Practical example:
 - [kafka_producer.py:17-228](file://services/cv_service/src/kafka_producer.py#L17-L228)
 - [settings.yaml:41-46](file://config/settings.yaml#L41-L46)
 
+## Enhanced Video Processing Pipeline
+
+**Updated** The pipeline now includes sophisticated video processing capabilities with automatic codec detection and fallback mechanisms.
+
+### Video Codec Support and Fallback Mechanisms
+The enhanced pipeline automatically detects codec compatibility and employs ffmpeg as a fallback for unsupported codecs:
+
+- **OpenCV First Approach**: Attempts to decode videos using OpenCV's VideoCapture
+- **Automatic Fallback Detection**: If OpenCV fails or reports unsupported codecs, automatically switches to ffmpeg subprocess
+- **FFprobe Metadata Extraction**: Uses ffprobe to extract video metadata (FPS, dimensions, frame count)
+- **Raw Frame Extraction**: ffmpeg extracts raw BGR24 frames for consistent processing
+
+### Advanced Frame Processing
+- **Frame Skipping Optimization**: Processes only every Nth frame based on configuration (`frame_skip`)
+- **Effective FPS Calculation**: Calculates effective processing FPS accounting for frame skipping
+- **Smart Resizing**: Maintains aspect ratio while resizing frames to configured width
+- **Timestamp Generation**: Creates precise timestamps in HH:MM:SS.mmm format
+
+### Comprehensive Error Handling
+- **Codec Failure Recovery**: Automatic fallback to ffmpeg when OpenCV cannot decode
+- **Graceful Degradation**: Continues processing with reduced functionality when components fail
+- **Resource Cleanup**: Proper cleanup of video resources and subprocess handles
+- **Logging and Monitoring**: Extensive logging for debugging and operational monitoring
+
+**Section sources**
+- [main.py:195-395](file://services/cv_service/src/main.py#L195-L395)
+- [settings.yaml:3-6](file://config/settings.yaml#L3-L6)
+
+## Dynamic Video Channel Management
+
+**Updated** The pipeline now supports dynamic video channel switching through control files for flexible multi-camera setups.
+
+### Control File System
+The system uses a simple text file mechanism for video channel selection:
+
+- **Control File Location**: `/app/frames/selected_video.txt`
+- **Format**: Plain text containing video filename or "all" for sequential processing
+- **Real-time Updates**: CV service checks for control file changes every 10 frames
+- **Graceful Switching**: Current video processing completes before switching channels
+
+### Channel Selection Logic
+- **Specific Channel**: When a filename is specified, only that video is processed
+- **All Channels**: When "all" is specified or file is missing, sequential processing occurs
+- **Runtime Changes**: Channel can be switched during processing without restarting the service
+- **State Reset**: Pipeline components are reset when switching between channels
+
+### Integration with Dashboard
+The control system integrates with the analytics dashboard for remote channel management:
+- **Web Interface**: Users can select channels through the Streamlit dashboard
+- **API Endpoint**: REST API endpoint `/api/videos/select` for programmatic control
+- **Status Reporting**: Current channel selection is displayed in the dashboard
+
+**Section sources**
+- [main.py:630-781](file://services/cv_service/src/main.py#L630-L781)
+- [api.py:596-613](file://services/analytics_backend/src/api.py#L596-L613)
+
+## Frame History and Memory Management
+
+**Updated** Enhanced frame management system with controlled history retention and memory optimization.
+
+### Frame History Controls
+The system maintains a controlled history of processed frames:
+
+- **MAX_FRAME_HISTORY**: Configurable limit for retained frames (default: 100 frames)
+- **Latest Frame**: Always maintains the most recent annotated frame for live preview
+- **Periodic Cleanup**: Old frames are automatically cleaned up to control memory usage
+- **JPEG Compression**: Frames saved with optimized compression settings
+
+### Memory Optimization Features
+- **Selective Retention**: Only retains frames that exceed the cleanup threshold
+- **Efficient Storage**: Uses JPEG format with quality settings optimized for visualization
+- **Cleanup Triggers**: Cleanup runs every 50 processed frames to balance performance and memory
+- **Error Resilience**: Cleanup operations don't interrupt video processing
+
+### Visualization Benefits
+- **Live Preview**: Dashboard always displays the latest processed frame
+- **Historical Analysis**: Ability to review recent frames for debugging and validation
+- **Performance Monitoring**: Frame history helps monitor processing performance and quality
+
+**Section sources**
+- [main.py:35-36](file://services/cv_service/src/main.py#L35-L36)
+- [main.py:518-628](file://services/cv_service/src/main.py#L518-L628)
+- [settings.yaml:3-6](file://config/settings.yaml#L3-L6)
+
 ## Dependency Analysis
 The pipeline exhibits clear stage-to-stage dependencies and external integrations:
 
@@ -274,6 +388,7 @@ The pipeline exhibits clear stage-to-stage dependencies and external integration
   - OpenCV for optical flow and image processing.
   - Kafka for event streaming.
   - PostgreSQL/TimescaleDB for persistence.
+  - FFmpeg for codec fallback processing.
 
 ```mermaid
 graph LR
@@ -284,10 +399,20 @@ AC --> TT["TimeTracker"]
 TT --> KP["KafkaProducer"]
 KP --> K["Kafka"]
 K --> P["PostgreSQL/TimescaleDB"]
+subgraph "Enhanced Processing"
+OPENCV["OpenCV<br/>Primary Decoder"]
+FFMPEG["FFmpeg<br/>Fallback Decoder"]
+CTRL["Control File<br/>Channel Selector"]
+FHIST["Frame History<br/>Manager"]
+end
+OPENCV --> M["Main Pipeline"]
+FFMPEG --> M
+CTRL --> M
+FHIST --> M
 ```
 
 **Diagram sources**
-- [main.py:345-372](file://services/cv_service/src/main.py#L345-L372)
+- [main.py:229-395](file://services/cv_service/src/main.py#L229-L395)
 - [kafka_producer.py:91-169](file://services/cv_service/src/kafka_producer.py#L91-L169)
 
 **Section sources**
@@ -300,12 +425,16 @@ K --> P["PostgreSQL/TimescaleDB"]
   - Frame skipping (default 3) reduces processing load.
   - Resize width (default 640) lowers pixel count.
   - Crop-based optical flow avoids full-frame computation.
+- **Enhanced Performance Features**:
+  - **Automatic Codec Detection**: Reduces processing overhead by avoiding unsupported codecs.
+  - **Effective FPS Calculation**: Accurate timing accounting for frame skipping.
+  - **Memory Management**: Controlled frame history prevents memory exhaustion.
+  - **Graceful Degradation**: Maintains operation even when individual components fail.
 - Practical tuning guidelines:
   - Increase smoothing_window to reduce flickering.
   - Adjust magnitude_threshold and flow thresholds for sensitivity.
   - Increase frame_skip or reduce resize_width for CPU savings.
-
-[No sources needed since this section provides general guidance]
+  - Monitor frame history cleanup to balance memory usage.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -328,6 +457,11 @@ Common issues and resolutions:
 - Kafka publishing errors:
   - Verify bootstrap_servers and topic configuration.
   - Check producer buffer limits and network connectivity.
+- **Enhanced Troubleshooting**:
+  - **Codec Issues**: Check ffmpeg installation and permissions if fallback fails.
+  - **Video Channel Problems**: Verify control file permissions and path correctness.
+  - **Memory Issues**: Monitor frame history cleanup and adjust MAX_FRAME_HISTORY.
+  - **Performance Degradation**: Check effective FPS calculations and frame skipping settings.
 
 **Section sources**
 - [detector.py:68-84](file://services/cv_service/src/detector.py#L68-L84)
@@ -340,7 +474,7 @@ Common issues and resolutions:
 ## Conclusion
 The pipeline combines efficient computer vision primitives with robust state management to deliver real-time equipment monitoring. By leveraging region-based optical flow and rule-based classification, it accurately distinguishes articulated motion from whole-body movement, enabling precise activity classification and utilization tracking. The modular design, centralized configuration, and event-driven architecture support scalability and maintainability.
 
-[No sources needed since this section summarizes without analyzing specific files]
+**Updated** The enhanced pipeline now provides production-grade reliability with automatic codec fallback, dynamic channel management, comprehensive error handling, and efficient memory management, making it suitable for enterprise-scale equipment monitoring deployments.
 
 ## Appendices
 
@@ -371,7 +505,31 @@ Publish --> Persist["Persist to Database"]
 Persist --> End(["End"])
 ```
 
-[No sources needed since this diagram shows conceptual workflow, not actual code structure]
+### Enhanced Video Processing Flow
+**Updated** The enhanced processing includes codec detection and fallback mechanisms:
+
+```mermaid
+flowchart TD
+Start(["Start"]) --> CheckCodec["Check Codec Support"]
+CheckCodec --> OpenCVOK{"OpenCV Can Decode?"}
+OpenCVOK --> |Yes| ProcessFrames["Process Frames via OpenCV"]
+OpenCVOK --> |No| FFprobe["Probe Video Metadata"]
+FFprobe --> FFmpegDecode["Decode via FFmpeg"]
+ProcessFrames --> Detect["Detect Equipment"]
+FFmpegDecode --> Detect
+Detect --> Track["Track Equipment"]
+Track --> Gray["Convert to Grayscale"]
+Gray --> Motion["Compute Region-based Optical Flow"]
+Motion --> Classify["Classify Activity"]
+Classify --> Time["Update Time Statistics"]
+Time --> Build["Build Kafka Event"]
+Build --> Publish["Publish to Kafka"]
+Publish --> Persist["Persist to Database"]
+Persist --> End(["End"])
+```
+
+**Section sources**
+- [main.py:229-395](file://services/cv_service/src/main.py#L229-L395)
 
 ### Configuration Reference
 Key parameters and their impact:
@@ -384,6 +542,9 @@ Key parameters and their impact:
 - kafka.bootstrap_servers/topic/client_id/consumer_group: Event streaming behavior.
 - database.host/port/name/user/password/uri: Persistence configuration.
 - dashboard.api_url/refresh_interval/page_title: Dashboard behavior.
+- **Enhanced Configuration**:
+  - MAX_FRAME_HISTORY: Controls frame history retention.
+  - selected_video.txt: Dynamic channel selection control file.
 
 **Section sources**
 - [settings.yaml:3-59](file://config/settings.yaml#L3-L59)
@@ -414,7 +575,7 @@ timestamp created_at
 - [db_models.py:22-67](file://services/analytics_backend/src/db_models.py#L22-L67)
 
 ### Validation via Tests
-Unit tests validate each component’s behavior:
+Unit tests validate each component's behavior:
 - ActivityClassifier tests cover rule-based classification and smoothing.
 - MotionAnalyzer tests cover optical flow computation, region splitting, and direction detection.
 - TimeTracker tests cover time accumulation, utilization calculation, and edge cases.
@@ -423,3 +584,17 @@ Unit tests validate each component’s behavior:
 - [test_activity_classifier.py:1-543](file://tests/test_activity_classifier.py#L1-L543)
 - [test_motion_analyzer.py:1-411](file://tests/test_motion_analyzer.py#L1-L411)
 - [test_time_tracker.py:1-482](file://tests/test_time_tracker.py#L1-L482)
+
+### Enhanced Error Handling and Logging
+**Updated** The pipeline includes comprehensive error handling and logging:
+
+- **Video Processing Errors**: Automatic fallback to ffmpeg with detailed logging
+- **Component Failures**: Graceful degradation with fallback mechanisms
+- **Resource Management**: Proper cleanup of video resources and subprocess handles
+- **Memory Management**: Controlled frame history with automatic cleanup
+- **Channel Switching**: Safe switching between video channels without data loss
+
+**Section sources**
+- [main.py:224-227](file://services/cv_service/src/main.py#L224-L227)
+- [main.py:389-396](file://services/cv_service/src/main.py#L389-L396)
+- [main.py:608-628](file://services/cv_service/src/main.py#L608-L628)

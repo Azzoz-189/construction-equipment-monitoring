@@ -231,6 +231,59 @@ detection:
 
 **Message delivery:** At-least-once semantics. Consumer handles idempotency via database constraints.
 
+### 6. MJPEG Streaming Architecture
+
+**Challenge:** Deliver real-time annotated video to the Streamlit dashboard without excessive CPU/memory usage or stale connections.
+
+**Solution:** A file-based frame relay with MJPEG streaming:
+
+```
+┌────────────┐    ┌─────────────────┐    ┌──────────────────┐    ┌──────────────┐
+│ CV Service │───▶│ Shared Volume   │───▶│ FastAPI MJPEG    │───▶│  Streamlit   │
+│ (annotate  │    │ /app/frames/    │    │ StreamingResponse│    │  <iframe>    │
+│  frames)   │    │ latest_frame.jpg│    │ /api/stream/mjpeg│    │  embed       │
+└────────────┘    └─────────────────┘    └──────────────────┘    └──────────────┘
+```
+
+**How it works:**
+1. **CV Service** writes each annotated frame as `latest_frame.jpg` to a shared Docker volume
+2. **FastAPI** polls the file at ~10 Hz, detects `mtime` changes, and pushes new frames as `multipart/x-mixed-replace` MJPEG chunks
+3. **Streamlit** embeds the MJPEG endpoint in an `<iframe>` — the browser handles decoding natively
+4. Streams auto-close after 60 seconds; client-side JavaScript reconnects automatically to prevent stale connection pile-up
+
+**Trade-offs:**
+- ✅ Zero additional dependencies — browsers support MJPEG natively
+- ✅ File-based decoupling — CV service and API server are independent
+- ✅ Fragment-based refresh in Streamlit — video stream never interrupts when data tables update
+- ⚠️ MJPEG bandwidth is higher than H.264/WebRTC (no inter-frame compression)
+- ⚠️ Single-file relay means only the latest frame is available (acceptable for monitoring use case)
+
+### 7. Per-Channel Architecture (Multi-Video Support)
+
+**Design:** Each video file acts as an independent monitoring channel. The system supports dynamic channel switching from the dashboard.
+
+**Key mechanisms:**
+- `video_source` field on every Kafka event and database record enables per-channel filtering
+- Channel switch via `POST /api/videos/select` writes a control file; the CV service detects it and resets its pipeline (tracker state, frame counter)
+- Dashboard uses Streamlit's fragment-based refresh (`@st.fragment`) — channel switch updates the data tables and video feed independently without full page reload
+- All API endpoints accept an optional `?channel=filename.mp4` query parameter to filter results per video source
+
+**Trade-offs:**
+- ✅ Clean separation of data per video source
+- ✅ Hot-switching without restarting containers
+- ⚠️ Only one video processed at a time (single CV pipeline instance)
+
+### 8. Why Streamlit for the Dashboard
+
+**Choice:** Streamlit was selected over alternatives (Dash, Gradio, custom React app) for rapid prototyping.
+
+**Rationale:**
+- Built-in widgets (tables, metrics, selectbox) match the dashboard requirements exactly
+- Fragment-based partial refresh (`@st.fragment`) enables updating video and data independently
+- Dark theme support for CCTV-style monitoring aesthetic
+- Single Python file — no frontend build toolchain required
+- Native Docker support with simple `streamlit run` entrypoint
+
 ---
 
 ## API Endpoints
@@ -238,11 +291,17 @@ detection:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/health` | Health check with database connection status |
-| `GET` | `/api/equipment` | List all equipment with latest state |
+| `GET` | `/api/equipment` | List all equipment with latest state (supports `?channel=`) |
 | `GET` | `/api/equipment/{id}/history` | Time-series history for specific equipment |
-| `GET` | `/api/utilization/summary` | Aggregate utilization statistics |
-| `GET` | `/api/latest-frame` | Current frame data for real-time display |
-| `GET` | `/api/stats` | Database statistics (event count, frame range) |
+| `GET` | `/api/utilization/summary` | Aggregate utilization statistics (supports `?channel=`) |
+| `GET` | `/api/latest-frame` | Current frame equipment data for real-time display (supports `?channel=`) |
+| `GET` | `/api/latest-frame-image` | Latest annotated frame as JPEG image |
+| `GET` | `/api/stream/mjpeg` | MJPEG live video stream (multipart/x-mixed-replace) |
+| `GET` | `/api/videos` | List available video channels with current selection |
+| `POST` | `/api/videos/select` | Select active video channel `{"filename": "video.mp4"}` |
+| `GET` | `/api/frame/{frame_id}` | Retrieve a specific historical frame image by ID |
+| `GET` | `/api/stats` | Database event statistics (supports `?channel=`) |
+| `GET` | `/docs` | FastAPI auto-generated interactive API documentation |
 
 ### Example Response: `/api/equipment`
 ```json
@@ -270,6 +329,7 @@ Topic: `equipment-events`
   "equipment_id": "DT-001",
   "equipment_class": "truck",
   "timestamp": "00:00:14.200",
+  "video_source": "excavator_video.mp4",
   "utilization": {
     "current_state": "ACTIVE",
     "current_activity": "DIGGING",
@@ -382,6 +442,118 @@ pytest tests/ -v --cov=services --cov-report=html
 ├── docker-compose.yml             # Multi-service orchestration
 └── README.md
 ```
+
+---
+
+## Evaluation & Verification Guide
+
+This section provides step-by-step instructions for evaluators to verify that all assessment requirements have been met.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- At least 8 GB RAM available
+- YouTube video files placed in `./videos/` directory (or use `yt-dlp` to download from `Youtube_urls.txt`)
+
+### Quick Start
+
+```bash
+# 1. Build all service images
+docker compose build
+
+# 2. Start all 6 services in detached mode
+docker compose up -d
+
+# 3. Wait ~2 minutes for all services to initialize (Kafka, DB migrations, model loading)
+
+# 4. Open the monitoring dashboard
+#    → http://localhost:8501
+
+# 5. Open the interactive API documentation
+#    → http://localhost:8000/docs
+```
+
+### Verifying Each Requirement
+
+#### 1. Equipment Detection (YOLOv8n)
+- Dashboard shows detected equipment with bounding boxes overlaid on the live video feed
+- Equipment IDs (e.g., `DT-001`, `VH-003`) appear as labels on each detected object
+- **Verify via API:**
+  ```bash
+  curl http://localhost:8000/api/equipment
+  ```
+
+#### 2. Multi-Object Tracking (ByteTrack)
+- Equipment IDs persist across frames — the same piece of equipment keeps the same ID
+- Track a specific equipment across multiple consecutive frames in the dashboard
+- **Verify via API:**
+  ```bash
+  curl http://localhost:8000/api/equipment/DT-001/history?limit=20
+  ```
+
+#### 3. Articulated Motion Analysis (Optical Flow)
+- Region-based motion detection distinguishes `arm_only` vs `full_body` vs `none`
+- Visible in the equipment status table under the **motion_source** column
+- Equipment performing digging shows `arm_only` motion (upper region only)
+- **Verify via API** — check the `motion_source` field in equipment history responses
+
+#### 4. Activity Classification
+- Four activity states visible: **DIGGING**, **DUMPING**, **SWINGING_LOADING**, **WAITING**
+- `ACTIVE` state (green indicators) for DIGGING / DUMPING / SWINGING_LOADING
+- `INACTIVE` state (red indicators) for WAITING
+- N-frame smoothing (default 5 frames) prevents flickering between states
+
+#### 5. Time Tracking & Utilization
+- Utilization percentage shown per equipment in the dashboard
+- Formula: `Active Time / Total Tracked Time × 100 = Utilization %`
+- **Verify summary statistics:**
+  ```bash
+  curl http://localhost:8000/api/utilization/summary
+  ```
+
+#### 6. Kafka Event Streaming
+- Events published to the `equipment-events` topic
+- Payload includes `frame_id`, `equipment_id`, `utilization`, `time_analytics`, `video_source`
+- **Verify by consuming messages directly:**
+  ```bash
+  docker exec -it kafka kafka-console-consumer \
+    --bootstrap-server localhost:9092 \
+    --topic equipment-events \
+    --from-beginning --max-messages 5
+  ```
+
+#### 7. Database Persistence (PostgreSQL / TimescaleDB)
+- All events are persisted in TimescaleDB for time-series querying
+- **Verify:**
+  ```bash
+  curl http://localhost:8000/api/stats
+  ```
+- Time-series data available per equipment via the history endpoint
+
+#### 8. REST API Endpoints
+- Full interactive API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Quick tests:**
+  ```bash
+  curl http://localhost:8000/api/health
+  curl http://localhost:8000/api/equipment
+  curl http://localhost:8000/api/utilization/summary
+  curl "http://localhost:8000/api/equipment?channel=filename.mp4"
+  ```
+
+#### 9. Dashboard (Real-Time Monitoring UI)
+- CCTV-style dark theme layout
+- Live MJPEG video feed with bounding box annotations
+- Channel selector dropdown (each video file = separate monitoring channel)
+- Scrollable equipment status table with per-equipment metrics
+- Utilization summary metrics (total equipment, active/inactive counts, avg utilization)
+- Per-channel statistics — select different channels and observe stats update dynamically
+- Fragment-based refresh — video stream is never interrupted when data tables refresh
+
+#### 10. Docker Compose Orchestration
+- All 6 services start with a single command: `docker compose up -d`
+- Health checks configured for all services
+- Proper dependency ordering: Zookeeper → Kafka → CV Service, PostgreSQL → Analytics Backend
+- Shared volumes for frame relay between CV Service and Analytics Backend
 
 ---
 

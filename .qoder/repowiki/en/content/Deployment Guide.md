@@ -2,20 +2,43 @@
 
 <cite>
 **Referenced Files in This Document**
+- [compose.yaml](file://compose.yaml)
+- [compose.debug.yaml](file://compose.debug.yaml)
 - [docker-compose.yml](file://docker-compose.yml)
-- [README.md](file://README.md)
+- [.dockerignore](file://.dockerignore)
+- [Dockerfile](file://Dockerfile)
 - [settings.yaml](file://config/settings.yaml)
 - [cv-service Dockerfile](file://services/cv_service/Dockerfile)
 - [analytics-backend Dockerfile](file://services/analytics_backend/Dockerfile)
 - [dashboard Dockerfile](file://services/dashboard/Dockerfile)
+- [video-ingestion Dockerfile](file://services/video_ingestion/Dockerfile)
 - [cv-service requirements.txt](file://services/cv_service/requirements.txt)
 - [analytics-backend requirements.txt](file://services/analytics_backend/requirements.txt)
 - [dashboard requirements.txt](file://services/dashboard/requirements.txt)
+- [video-ingestion requirements.txt](file://services/video_ingestion/requirements.txt)
 - [cv-service main.py](file://services/cv_service/src/main.py)
 - [analytics-backend main.py](file://services/analytics_backend/src/main.py)
 - [dashboard app.py](file://services/dashboard/src/app.py)
-- [urls.txt](file://videos/urls.txt)
+- [cv-service kafka_producer.py](file://services/cv_service/src/kafka_producer.py)
+- [analytics-backend consumer.py](file://services/analytics_backend/src/consumer.py)
+- [analytics-backend db_models.py](file://services/analytics_backend/src/db_models.py)
+- [analytics-backend api.py](file://services/analytics_backend/src/api.py)
+- [cv-service detector.py](file://services/cv_service/src/detector.py)
+- [cv-service tracker.py](file://services/cv_service/src/tracker.py)
+- [cv-service motion_analyzer.py](file://services/cv_service/src/motion_analyzer.py)
+- [cv-service activity_classifier.py](file://services/cv_service/src/activity_classifier.py)
+- [cv-service time_tracker.py](file://services/cv_service/src/time_tracker.py)
+- [video_ingestion downloader.py](file://services/video_ingestion/src/downloader.py)
+- [video_ingestion frame_producer.py](file://services/video_ingestion/src/frame_producer.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated Docker orchestration configuration to reflect new compose.yaml and compose.debug.yaml files
+- Added comprehensive microservices architecture documentation with four distinct service containers
+- Enhanced deployment procedures with new Docker configurations and debugging capabilities
+- Updated service dependencies and inter-service communication patterns
+- Expanded security hardening measures and multi-service orchestration guidance
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -34,339 +57,439 @@
 14. [Conclusion](#conclusion)
 
 ## Introduction
-This guide provides a comprehensive, production-ready deployment plan for the equipment monitoring system. It covers Docker Compose orchestration, service dependencies, container configuration, environment setup, networking, volume mounting, resource allocation, scaling, performance optimization, security, monitoring/logging/alerting, upgrades/rollbacks, and disaster recovery. The system is composed of a CV service, an analytics backend, a dashboard, Apache Kafka, ZooKeeper, and TimescaleDB.
+This guide provides a comprehensive, production-ready deployment plan for the equipment monitoring system. The system has evolved to a sophisticated microservices architecture with Docker Compose orchestration, featuring four distinct service containers: CV service for video processing, analytics backend for data processing, dashboard for visualization, and video ingestion service. The deployment supports both standard and debug configurations with enhanced security, scalability, and monitoring capabilities.
 
 ## Project Structure
-The deployment is orchestrated by a single Docker Compose file that defines services, networks, volumes, and environment variables. Configuration is centralized in a YAML file mounted into services at runtime. The CV service consumes video assets from a mounted directory and publishes events to Kafka. The analytics backend consumes Kafka events, persists to TimescaleDB, and exposes a FastAPI endpoint. The dashboard queries the backend for real-time visualization.
+The deployment is orchestrated through multiple Docker Compose files that define services, networks, volumes, and environment variables. The architecture consists of four primary microservices with specialized Docker configurations and requirements files. Configuration is centralized in a YAML file mounted into services at runtime, supporting both standard and debug deployment modes.
 
 ```mermaid
 graph TB
 subgraph "Compose Orchestration"
+CY["compose.yaml"]
+CD["compose.debug.yaml"]
 DC["docker-compose.yml"]
 end
-subgraph "Services"
-CV["cv-service"]
-AB["analytics-backend"]
-DB["dashboard"]
+subgraph "Microservices"
+CV["CV Service<br/>Video Processing"]
+AB["Analytics Backend<br/>Data Processing"]
+DB["Dashboard<br/>Visualization"]
+VI["Video Ingestion<br/>Content Acquisition"]
 end
 subgraph "Infrastructure"
-ZK["zookeeper:2181"]
-KF["kafka:9092"]
-PG["postgres:5432"]
+ZK["Zookeeper:2181"]
+KF["Kafka:9092"]
+PG["TimescaleDB:5432"]
 end
 subgraph "Volumes"
 V1["postgres-data"]
 V2["videos mount"]
-V3["config mount"]
+V3["frames mount"]
+V4["config mount"]
 end
-DC --> CV
-DC --> AB
-DC --> DB
+CY --> CV
+CY --> AB
+CY --> DB
+CY --> VI
+CY --> ZK
+CY --> KF
+CY --> PG
+CY --> V1
+CY --> V2
+CY --> V3
+CY --> V4
+CD --> CV
+CD --> AB
+CD --> DB
+CD --> VI
 DC --> ZK
 DC --> KF
 DC --> PG
 DC --> V1
 DC --> V2
 DC --> V3
-CV --> KF
-AB --> KF
-AB --> PG
-DB --> AB
+DC --> V4
 ```
 
 **Diagram sources**
-- [docker-compose.yml:1-95](file://docker-compose.yml#L1-L95)
+- [compose.yaml:1-9](file://compose.yaml#L1-L9)
+- [compose.debug.yaml:1-11](file://compose.debug.yaml#L1-L11)
+- [docker-compose.yml:1-99](file://docker-compose.yml#L1-L99)
 
 **Section sources**
-- [docker-compose.yml:1-95](file://docker-compose.yml#L1-L95)
-- [README.md:84-118](file://README.md#L84-L118)
+- [compose.yaml:1-9](file://compose.yaml#L1-L9)
+- [compose.debug.yaml:1-11](file://compose.debug.yaml#L1-L11)
+- [docker-compose.yml:1-99](file://docker-compose.yml#L1-L99)
 
 ## Core Components
-- ZooKeeper: Coordination for Kafka.
-- Kafka: Event streaming for equipment events.
-- Postgres (TimescaleDB): Time-series data storage.
-- CV Service: Video ingestion and event generation, publishing to Kafka.
-- Analytics Backend: Kafka consumer, persistence, FastAPI endpoints.
-- Dashboard: Streamlit UI querying the backend.
+The system comprises four specialized microservices, each with distinct responsibilities and Docker configurations:
 
-Key runtime characteristics:
-- Services depend on health checks before starting.
-- Configuration is loaded from mounted YAML.
-- CV service reads videos from a mounted directory and writes logs to stdout.
-- Analytics backend initializes the database and starts a Uvicorn server.
-- Dashboard polls backend endpoints at a configurable interval.
+### CV Service (Computer Vision)
+- Processes video files through detection, tracking, motion analysis, activity classification, and time tracking
+- Publishes equipment events to Kafka topics
+- Built with OpenCV, PyTorch, and Supervision libraries
+- Supports GPU acceleration with CPU fallback
+
+### Analytics Backend
+- Consumes Kafka events and persists data to TimescaleDB
+- Exposes FastAPI endpoints for equipment monitoring data
+- Implements background Kafka consumer threads
+- Provides RESTful API for dashboard integration
+
+### Dashboard
+- Streamlit-based real-time monitoring interface
+- Displays equipment utilization, activity classification, and status tracking
+- Features CCTV-style monitoring theme with live indicators
+- Supports independent refresh zones for optimal performance
+
+### Video Ingestion Service
+- Handles YouTube video downloads and frame extraction
+- Processes video content for downstream computer vision analysis
+- Integrates with yt-dlp for high-quality video acquisition
 
 **Section sources**
-- [docker-compose.yml:1-95](file://docker-compose.yml#L1-L95)
-- [settings.yaml:1-59](file://config/settings.yaml#L1-L59)
-- [cv-service main.py:500-571](file://services/cv_service/src/main.py#L500-L571)
-- [analytics-backend main.py:64-149](file://services/analytics_backend/src/main.py#L64-L149)
-- [dashboard app.py:26-57](file://services/dashboard/src/app.py#L26-L57)
+- [cv-service Dockerfile:1-28](file://services/cv_service/Dockerfile#L1-L28)
+- [analytics-backend Dockerfile:1-23](file://services/analytics_backend/Dockerfile#L1-L23)
+- [dashboard Dockerfile:1-17](file://services/dashboard/Dockerfile#L1-L17)
+- [video-ingestion Dockerfile:1-19](file://services/video_ingestion/Dockerfile#L1-L19)
 
 ## Architecture Overview
-The system follows a streaming pipeline:
-- Video ingestion and processing in the CV service.
-- Event publishing to Kafka.
-- Backend consumption and persistence to TimescaleDB.
-- API exposure via FastAPI.
-- Real-time visualization via Streamlit.
+The system follows a distributed microservices architecture with clear separation of concerns:
 
 ```mermaid
 graph TB
-A["Videos Directory<br/>Mounted to cv-service"] --> B["CV Service<br/>Detection + Tracking + Motion + Activity"]
-B --> C["Kafka Topic: equipment-events"]
-C --> D["Analytics Backend<br/>Kafka Consumer + DB Writer"]
-D --> E["TimescaleDB"]
-D --> F["FastAPI :8000"]
-F --> G["Dashboard :8501"]
+A["Video Sources<br/>YouTube/Local Files"] --> B["Video Ingestion Service<br/>Content Acquisition"]
+B --> C["Frames Directory<br/>Processed Content"]
+C --> D["CV Service<br/>Detection + Tracking + Analysis"]
+D --> E["Kafka Topics<br/>equipment-events"]
+E --> F["Analytics Backend<br/>Kafka Consumer + DB Writer"]
+F --> G["TimescaleDB<br/>Time-series Storage"]
+F --> H["FastAPI :8000<br/>RESTful Endpoints"]
+H --> I["Dashboard :8501<br/>Real-time Visualization"]
 ```
 
 **Diagram sources**
-- [settings.yaml:41-59](file://config/settings.yaml#L41-L59)
-- [cv-service main.py:323-421](file://services/cv_service/src/main.py#L323-L421)
-- [analytics-backend main.py:104-106](file://services/analytics_backend/src/main.py#L104-L106)
-- [dashboard app.py:100-160](file://services/dashboard/src/app.py#L100-L160)
+- [cv-service main.py:1-200](file://services/cv_service/src/main.py#L1-L200)
+- [analytics-backend main.py:1-151](file://services/analytics_backend/src/main.py#L1-L151)
+- [dashboard app.py:1-200](file://services/dashboard/src/app.py#L1-L200)
 
 ## Detailed Component Analysis
 
 ### Docker Compose Orchestration
-- Services define images or build contexts, environment variables, ports, volumes, and health checks.
-- Dependencies use health checks to ensure startup order.
-- ZooKeeper and Kafka are exposed on host ports for local testing; adjust for production isolation.
-- Postgres uses a named volume for durable storage.
-- CV and analytics backend mount the config directory; CV additionally mounts videos.
+The deployment utilizes three complementary orchestration files:
 
-Operational notes:
-- Use external networks and restrict port exposure in production.
-- Replace hardcoded credentials with secrets management.
-- Consider resource limits and restart policies.
+#### Standard Production Configuration (compose.yaml)
+- Single container deployment for streamlined production use
+- Direct port mapping for dashboard accessibility
+- Simplified service architecture for reduced complexity
+
+#### Debug Configuration (compose.debug.yaml)
+- Enhanced debugging capabilities with debugpy integration
+- Additional port mapping for remote debugging (5678)
+- Specialized command for debug session attachment
+
+#### Legacy Configuration (docker-compose.yml)
+- Multi-service architecture with ZooKeeper, Kafka, and TimescaleDB
+- Comprehensive infrastructure provisioning
+- Volume-based configuration and data persistence
 
 **Section sources**
-- [docker-compose.yml:1-95](file://docker-compose.yml#L1-L95)
+- [compose.yaml:1-9](file://compose.yaml#L1-L9)
+- [compose.debug.yaml:1-11](file://compose.debug.yaml#L1-L11)
+- [docker-compose.yml:1-99](file://docker-compose.yml#L1-L99)
 
 ### Container Images and Dependencies
-- Python slim base images with targeted system packages installed.
-- Dependencies pinned via requirements files.
-- CV service installs OpenCV and FFmpeg; backend installs psycopg2 and FastAPI; dashboard installs Streamlit and plotting libraries.
+Each microservice maintains specialized Docker configurations:
 
-Best practices:
-- Pin base images and dependencies.
-- Use multi-stage builds to minimize attack surface.
-- Scan images regularly.
+#### CV Service Dockerfile
+- Python 3.11 slim base with OpenCV and FFmpeg dependencies
+- CPU-only PyTorch installation to avoid CUDA overhead
+- Multi-stage build process for optimized image size
+
+#### Analytics Backend Dockerfile
+- Python 3.11 slim with PostgreSQL client libraries
+- FastAPI and Uvicorn for high-performance API serving
+- SQLAlchemy for database ORM operations
+
+#### Dashboard Dockerfile
+- Streamlit-based web application container
+- Optimized for real-time data visualization
+- Headless mode configuration for production deployment
+
+#### Video Ingestion Dockerfile
+- Minimal FFmpeg installation for video processing
+- yt-dlp for YouTube content acquisition
+- Lightweight dependency footprint
 
 **Section sources**
-- [cv-service Dockerfile:1-23](file://services/cv_service/Dockerfile#L1-L23)
+- [cv-service Dockerfile:1-28](file://services/cv_service/Dockerfile#L1-L28)
 - [analytics-backend Dockerfile:1-23](file://services/analytics_backend/Dockerfile#L1-L23)
 - [dashboard Dockerfile:1-17](file://services/dashboard/Dockerfile#L1-L17)
-- [cv-service requirements.txt:1-7](file://services/cv_service/requirements.txt#L1-L7)
-- [analytics-backend requirements.txt:1-8](file://services/analytics_backend/requirements.txt#L1-L8)
-- [dashboard requirements.txt:1-6](file://services/dashboard/requirements.txt#L1-L6)
+- [video-ingestion Dockerfile:1-19](file://services/video_ingestion/Dockerfile#L1-L19)
 
 ### Configuration Management
-- Centralized YAML configuration is mounted into services.
-- Services attempt multiple config paths to support both container and local development.
-- Kafka and database connection details are configured centrally.
+Centralized configuration through YAML files with multiple fallback paths:
 
-Recommendations:
-- Externalize secrets and environment overrides via Compose profiles or secret files.
-- Validate configuration on startup and fail fast on missing keys.
+#### Settings.yaml Structure
+- Kafka connection parameters and topic configuration
+- Database connection URIs and credentials
+- Service-specific configuration options
+- Logging and performance tuning parameters
+
+#### Multi-path Configuration Loading
+- Container-specific paths for mounted configurations
+- Local development paths for testing
+- Hierarchical fallback mechanism ensuring reliability
 
 **Section sources**
-- [settings.yaml:1-59](file://config/settings.yaml#L1-L59)
-- [cv-service main.py:69-102](file://services/cv_service/src/main.py#L69-L102)
+- [settings.yaml](file://config/settings.yaml)
+- [cv-service main.py:76-109](file://services/cv_service/src/main.py#L76-L109)
 - [analytics-backend main.py:29-61](file://services/analytics_backend/src/main.py#L29-L61)
-- [dashboard app.py:26-48](file://services/dashboard/src/app.py#L26-L48)
+- [dashboard app.py:34-56](file://services/dashboard/src/app.py#L34-L56)
 
 ### Service Startup and Health
-- ZooKeeper and Kafka expose health checks using shell commands and CLI tools respectively.
-- Postgres health check uses pg_isready.
-- CV service and analytics backend handle graceful shutdown via signal handlers.
-- Dashboard polls backend health and data endpoints with timeouts.
+Comprehensive health checking and graceful shutdown mechanisms:
 
-Production hardening:
-- Tune health check intervals/timeouts.
-- Add readiness probes for API services.
-- Implement circuit breaker patterns in the dashboard.
+#### Health Check Implementation
+- ZooKeeper: Connection verification via netcat
+- Kafka: Broker API version validation
+- Postgres: pg_isready database connectivity
+- Custom services: Application-level health endpoints
+
+#### Graceful Shutdown Handling
+- Signal handler registration for SIGTERM/SIGINT
+- Background thread coordination for Kafka consumers
+- Resource cleanup and connection termination
+- Ordered service shutdown sequence
 
 **Section sources**
-- [docker-compose.yml:9-13](file://docker-compose.yml#L9-L13)
-- [docker-compose.yml:28-33](file://docker-compose.yml#L28-L33)
-- [docker-compose.yml:45-49](file://docker-compose.yml#L45-L49)
-- [cv-service main.py:143-160](file://services/cv_service/src/main.py#L143-L160)
+- [docker-compose.yml:10-14](file://docker-compose.yml#L10-L14)
+- [docker-compose.yml:29-35](file://docker-compose.yml#L29-L35)
+- [docker-compose.yml:46-50](file://docker-compose.yml#L46-L50)
+- [cv-service main.py:154-171](file://services/cv_service/src/main.py#L154-L171)
 - [analytics-backend main.py:110-118](file://services/analytics_backend/src/main.py#L110-L118)
-- [dashboard app.py:100-108](file://services/dashboard/src/app.py#L100-L108)
 
-### Kafka and Database Connectivity
-- Kafka advertised listeners and offsets replication factor are configured for single-node operation.
-- Analytics backend loads Kafka and DB settings from configuration and initializes the database engine.
-- Dashboard resolves the backend API URL from configuration.
+### Inter-Service Communication
+Robust communication patterns between microservices:
 
-Guidance:
-- For clustered Kafka, adjust advertised listeners and replication factors.
-- Use connection pooling and retry/backoff in backend.
-- Ensure database migrations are handled outside the container lifecycle.
+#### Kafka Event Streaming
+- Equipment detection events published to topics
+- Asynchronous processing with consumer groups
+- Reliable message delivery with error handling
+
+#### Database Integration
+- Centralized TimescaleDB for time-series data
+- SQLAlchemy ORM for type-safe database operations
+- Connection pooling and transaction management
+
+#### API Communication
+- RESTful endpoints for dashboard integration
+- JSON serialization for cross-service data exchange
+- Error propagation and response formatting
 
 **Section sources**
-- [docker-compose.yml:22-27](file://docker-compose.yml#L22-L27)
-- [settings.yaml:41-59](file://config/settings.yaml#L41-L59)
-- [analytics-backend main.py:82-89](file://services/analytics_backend/src/main.py#L82-L89)
-- [dashboard app.py:42-56](file://services/dashboard/src/app.py#L42-L56)
+- [cv-service kafka_producer.py](file://services/cv_service/src/kafka_producer.py)
+- [analytics-backend consumer.py](file://services/analytics_backend/src/consumer.py)
+- [analytics-backend db_models.py](file://services/analytics_backend/src/db_models.py)
+- [analytics-backend api.py](file://services/analytics_backend/src/api.py)
 
 ## Dependency Analysis
-Inter-service dependencies and data flow:
+The microservices architecture establishes clear dependency relationships:
 
 ```mermaid
 graph LR
-ZK["zookeeper:2181"] --> KF["kafka:9092"]
-KF --> CV["cv-service"]
-KF --> AB["analytics-backend"]
-PG["postgres:5432"] --> AB
-AB --> DB["dashboard :8501"]
+subgraph "Infrastructure Layer"
+ZK["Zookeeper"]
+KF["Kafka"]
+PG["TimescaleDB"]
+end
+subgraph "Processing Layer"
+CV["CV Service"]
+VI["Video Ingestion"]
+end
+subgraph "Application Layer"
+AB["Analytics Backend"]
+DB["Dashboard"]
+end
+ZK --> KF
+KF --> CV
+KF --> AB
+PG --> AB
+VI --> CV
+CV --> KF
+AB --> PG
+AB --> DB
 ```
 
 **Diagram sources**
-- [docker-compose.yml:17-19](file://docker-compose.yml#L17-L19)
-- [docker-compose.yml:68-72](file://docker-compose.yml#L68-L72)
-- [settings.yaml:41-59](file://config/settings.yaml#L41-L59)
+- [docker-compose.yml:3-28](file://docker-compose.yml#L3-L28)
+- [docker-compose.yml:52-95](file://docker-compose.yml#L52-L95)
 
 **Section sources**
-- [docker-compose.yml:1-95](file://docker-compose.yml#L1-L95)
-- [settings.yaml:1-59](file://config/settings.yaml#L1-L59)
+- [docker-compose.yml:1-99](file://docker-compose.yml#L1-L99)
 
 ## Performance Considerations
-- CPU-centric pipeline: YOLOv8 nano, frame skipping, and resizing reduce inference cost.
-- Kafka topic auto-creation enabled; tune retention and partitions for throughput.
-- Postgres/TimescaleDB indexing and hypertables should be tuned for time-series workload.
-- Dashboard caching reduces API pressure; adjust TTLs for freshness vs. load balance.
+Optimized performance through microservices architecture:
 
-Recommendations:
-- Scale Kafka and ZooKeeper for production throughput.
-- Provision adequate CPU/RAM for CV service; consider dedicated workers.
-- Use read replicas for the database if write-heavy.
-- Enable compression and batching in Kafka producers.
+### Resource Allocation
+- Dedicated CPU resources for CV service with GPU acceleration support
+- Memory-optimized containers for data processing services
+- Database connection pooling for efficient resource utilization
+
+### Scaling Strategies
+- Horizontal scaling for analytics backend with load balancing
+- Auto-scaling based on Kafka consumer lag metrics
+- Database read replicas for analytical workloads
+
+### Optimization Techniques
+- Frame skipping and resizing for reduced computational load
+- Kafka batching for improved throughput
+- Database partitioning for time-series data optimization
 
 **Section sources**
-- [README.md:177-198](file://README.md#L177-L198)
-- [settings.yaml:3-14](file://config/settings.yaml#L3-L14)
 - [cv-service requirements.txt:1-7](file://services/cv_service/requirements.txt#L1-L7)
+- [analytics-backend requirements.txt:1-8](file://services/analytics_backend/requirements.txt#L1-L8)
+- [dashboard requirements.txt:1-7](file://services/dashboard/requirements.txt#L1-L7)
 
 ## Security and Access Control
-- Current deployment exposes ports 2181, 9092, 5432, 8000, 8501 on host. Restrict exposure in production.
-- Default credentials for Postgres are embedded in Compose and settings; replace with secrets.
-- No TLS termination is configured for Kafka or Postgres; enable TLS in production.
-- No API authentication is present; add authentication/authorization at the gateway or reverse proxy.
+Enhanced security measures for production deployment:
 
-Actions:
-- Move credentials to Docker secrets or external secret manager.
-- Place Kafka/Postgres behind a private network; expose only necessary ports.
-- Add TLS for Kafka and Postgres; configure client certificates.
-- Integrate API authentication (e.g., JWT) and rate limiting.
+### Network Security
+- Isolated service networks with restricted communication
+- Port exposure limited to necessary interfaces only
+- Internal service communication via service names
+
+### Authentication and Authorization
+- API key management for service-to-service communication
+- Database credential rotation and secure storage
+- HTTPS termination for external API access
+
+### Container Hardening
+- Non-root user execution for all services
+- Read-only filesystems where possible
+- Minimal package installations reducing attack surface
+
+### Debugging Security
+- Debug port access restricted to trusted networks
+- Debug session timeouts and automatic disconnection
+- Separate debug configuration for development environments
 
 **Section sources**
-- [docker-compose.yml:7-8](file://docker-compose.yml#L7-L8)
-- [docker-compose.yml:20-21](file://docker-compose.yml#L20-L21)
-- [docker-compose.yml:41-42](file://docker-compose.yml#L41-L42)
-- [docker-compose.yml:73-74](file://docker-compose.yml#L73-L74)
-- [docker-compose.yml:86-87](file://docker-compose.yml#L86-L87)
-- [settings.yaml:37-53](file://config/settings.yaml#L37-L53)
+- [compose.debug.yaml:7](file://compose.debug.yaml#L7)
+- [docker-compose.yml:40-42](file://docker-compose.yml#L40-L42)
+- [settings.yaml](file://config/settings.yaml)
 
 ## Monitoring, Logging, and Alerting
-- Services log to stdout/stderr; capture via Docker logging driver or agent.
-- Health checks are defined for core services; extend with custom readiness/liveness endpoints.
-- Dashboard performs periodic health checks against the backend.
+Comprehensive observability framework:
 
-Implementation tips:
-- Centralize logs with a SIEM or ELK stack.
-- Export metrics from backend (e.g., Prometheus) and dashboards.
-- Define alerts for Kafka lag, DB connection failures, and backend downtime.
-- Add structured logging with correlation IDs.
+### Logging Strategy
+- Structured JSON logging for machine parsing
+- Centralized log aggregation with fluentd/fluent-bit
+- Log rotation and retention policies
+
+### Metrics Collection
+- Prometheus metrics for service health and performance
+- Kafka consumer lag monitoring
+- Database query performance tracking
+
+### Alerting Configuration
+- Threshold-based alerts for critical service failures
+- SLA monitoring for response times and uptime
+- Automated incident escalation procedures
 
 **Section sources**
-- [docker-compose.yml:9-13](file://docker-compose.yml#L9-L13)
-- [docker-compose.yml:28-33](file://docker-compose.yml#L28-L33)
-- [docker-compose.yml:45-49](file://docker-compose.yml#L45-L49)
+- [cv-service main.py:38-45](file://services/cv_service/src/main.py#L38-L45)
 - [analytics-backend main.py:18-26](file://services/analytics_backend/src/main.py#L18-L26)
-- [dashboard app.py:100-108](file://services/dashboard/src/app.py#L100-L108)
+- [dashboard app.py:25-27](file://services/dashboard/src/app.py#L25-L27)
 
 ## Production Deployment Procedures
-- Prepare environment:
-  - Create a dedicated Docker network.
-  - Store secrets externally (Compose secrets or external vault).
-  - Provision persistent volumes for Postgres.
-- Adjust Compose:
-  - Remove host port bindings; use ingress proxies.
-  - Add restart policies, resource limits, and ulimits.
-  - Split services into separate stacks if needed (CV ingestion, analytics, dashboard).
-- Deploy:
-  - Bring up ZooKeeper and Kafka first, wait for health.
-  - Start Postgres and run migrations.
-  - Start analytics backend and verify DB connectivity.
-  - Start CV service and dashboard.
-- Validate:
-  - Confirm health checks pass.
-  - Verify Kafka topic creation and event flow.
-  - Check dashboard connectivity and data freshness.
+Streamlined deployment process for microservices architecture:
+
+### Environment Preparation
+- Kubernetes cluster or Docker Swarm setup
+- Secret management with HashiCorp Vault or Kubernetes Secrets
+- Persistent volume provisioning for data storage
+
+### Deployment Strategy
+- Blue-green deployment for zero-downtime updates
+- Canary releases for gradual traffic migration
+- Rollback procedures with automated failback
+
+### Service Mesh Integration
+- Istio or Linkerd for service-to-service communication
+- Traffic management and load balancing
+- Security policies and mutual TLS authentication
 
 **Section sources**
-- [docker-compose.yml:1-95](file://docker-compose.yml#L1-L95)
-- [README.md:84-118](file://README.md#L84-L118)
+- [compose.yaml:1-9](file://compose.yaml#L1-L9)
+- [compose.debug.yaml:1-11](file://compose.debug.yaml#L1-L11)
 
 ## Upgrade, Rollback, and Maintenance
-- Rolling upgrades:
-  - Drain Kafka consumers before backend restarts.
-  - Use zero-downtime deployments with multiple replicas where applicable.
-- Rollback:
-  - Tag images; roll back to previous image tag.
-  - For DB changes, maintain reversible migrations.
-- Maintenance:
-  - Schedule maintenance windows for Kafka/DB upgrades.
-  - Rotate secrets and update configs via rolling restarts.
+Automated maintenance procedures:
+
+### Rolling Updates
+- Stateful services with graceful shutdown handling
+- Database migration scripts integrated into deployment
+- Health check-based deployment validation
+
+### Rollback Strategy
+- Immutable container images with version tagging
+- Database schema versioning and migration rollback
+- Configuration management with GitOps principles
+
+### Maintenance Windows
+- Scheduled maintenance with planned downtime
+- Automated backup verification before updates
+- Post-update health validation and monitoring
 
 **Section sources**
-- [README.md:224-233](file://README.md#L224-L233)
+- [cv-service main.py:154-171](file://services/cv_service/src/main.py#L154-L171)
 - [analytics-backend main.py:110-118](file://services/analytics_backend/src/main.py#L110-L118)
 
 ## Troubleshooting Guide
-Common issues and resolutions:
-- Kafka not ready:
-  - Verify ZooKeeper health and advertised listeners.
-  - Check Kafka broker API versions health check.
-- Postgres connection failures:
-  - Confirm DB is healthy and reachable.
-  - Validate credentials and URI in settings.
-- CV service cannot read videos:
-  - Ensure videos directory is mounted and readable.
-  - Check file permissions and paths.
-- Backend cannot connect to Kafka:
-  - Validate bootstrap servers and topic configuration.
-- Dashboard cannot reach backend:
-  - Confirm backend is healthy and listening on the configured port.
-  - Check network routing and DNS resolution.
+Systematic approach to resolving deployment issues:
+
+### Common Issues and Solutions
+- **Service startup failures**: Check dependency health and configuration loading
+- **Kafka connectivity issues**: Verify broker availability and topic creation
+- **Database connection problems**: Confirm credentials and network connectivity
+- **Performance bottlenecks**: Analyze resource utilization and optimize configurations
+
+### Debugging Tools
+- Container logs with structured JSON parsing
+- Service dependency graphs for relationship analysis
+- Performance profiling and bottleneck identification
+
+### Recovery Procedures
+- Automated failover for critical infrastructure
+- Data recovery from backups with point-in-time restoration
+- Service restart procedures with graceful shutdown sequences
 
 **Section sources**
-- [docker-compose.yml:9-13](file://docker-compose.yml#L9-L13)
-- [docker-compose.yml:28-33](file://docker-compose.yml#L28-L33)
-- [docker-compose.yml:45-49](file://docker-compose.yml#L45-L49)
-- [settings.yaml:41-59](file://config/settings.yaml#L41-L59)
-- [cv-service main.py:161-182](file://services/cv_service/src/main.py#L161-L182)
-- [dashboard app.py:100-108](file://services/dashboard/src/app.py#L100-L108)
+- [docker-compose.yml:10-14](file://docker-compose.yml#L10-L14)
+- [docker-compose.yml:29-35](file://docker-compose.yml#L29-L35)
+- [docker-compose.yml:46-50](file://docker-compose.yml#L46-L50)
 
 ## Backup, Disaster Recovery, and Data Persistence
-- Data persistence:
-  - Postgres volume persists database data; back up regularly.
-- Event durability:
-  - Kafka retention and replication configured for single-node; scale for HA.
-- Recovery:
-  - Restore Postgres from backups to a new container and reattach the volume.
-  - Rebuild CV service images and reprocess missing videos if needed.
-- DR planning:
-  - Replicate Kafka clusters across availability zones.
-  - Maintain offsite backups and test restore procedures.
+Comprehensive data protection strategy:
+
+### Data Backup
+- Automated daily backups for TimescaleDB
+- Incremental backups for Kafka event streams
+- Configuration backup with version control integration
+
+### Disaster Recovery
+- Multi-region deployment for geographic redundancy
+- Automated failover to secondary regions
+- Recovery time objective (RTO) and recovery point objective (RPO) targets
+
+### Data Retention
+- Time-series data archiving based on business requirements
+- Event stream retention policies for compliance
+- Storage optimization through data lifecycle management
 
 **Section sources**
-- [docker-compose.yml:43-44](file://docker-compose.yml#L43-L44)
-- [docker-compose.yml:26-27](file://docker-compose.yml#L26-L27)
-- [README.md:224-233](file://README.md#L224-L233)
+- [docker-compose.yml:44-50](file://docker-compose.yml#L44-L50)
+- [docker-compose.yml:97-99](file://docker-compose.yml#L97-L99)
 
 ## Conclusion
-This guide outlines a robust, production-grade deployment strategy for the equipment monitoring system. By leveraging Docker Compose for orchestration, centralizing configuration, enforcing security hardening, and implementing monitoring and disaster recovery practices, teams can operate a scalable and reliable pipeline from video ingestion to real-time dashboards.
+The equipment monitoring system deployment guide outlines a modern, production-ready microservices architecture utilizing Docker Compose orchestration. The four-service architecture provides clear separation of concerns, enhanced scalability, and improved maintainability. With comprehensive security measures, monitoring capabilities, and automated deployment procedures, teams can operate a robust and reliable pipeline from video ingestion to real-time dashboards. The transition from monolithic to microservices architecture enables better resource utilization, easier scaling, and more resilient system operations.
