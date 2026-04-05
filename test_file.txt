@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+date: Sat, 04 Apr 2026 07:50:50 GMT
+server: uvicorn
+cache-control: no-cache, no-store, must-revalidate
+pragma: no-cache
+expires: 0
+content-type: multipart/x-mixed-replace; boundary=frame
+Transfer-Encoding: chunked
+Connection: close
+

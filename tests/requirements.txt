@@ -1,0 +1,12 @@
+# Test dependencies for Equipment Utilization CV Service tests
+
+# Testing framework
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Core libraries needed by the modules under test
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+pyyaml>=6.0
+
+# Note: ultralytics (YOLO) is not needed for tests as we mock the model

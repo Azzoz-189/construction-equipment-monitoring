@@ -1,0 +1,58 @@
+# Equipment Utilization & Activity Classification - Configuration
+
+video:
+  frame_skip: 3              # Process every Nth frame for CPU performance
+  resize_width: 640          # Resize frame width for inference
+  input_dir: "/app/videos"   # Video files directory
+
+detection:
+  model: "yolov8n.pt"       # YOLOv8 nano for CPU
+  confidence_threshold: 0.4
+  device: "cpu"
+  input_size: 640
+  # COCO class IDs to detect (truck=7, car=2, bus=5)
+  target_classes: [2, 5, 7]
+  # Friendly names mapping
+  class_names:
+    2: "car"
+    5: "bus"
+    7: "truck"
+
+tracking:
+  track_thresh: 0.25
+  track_buffer: 30
+  match_thresh: 0.8
+  equipment_id_prefix:
+    truck: "DT"
+    car: "VH"
+    bus: "BU"
+    default: "EQ"
+
+motion:
+  magnitude_threshold: 2.0    # Minimum optical flow magnitude to consider as "moving"
+  upper_region_ratio: 0.5     # Top portion of bbox for arm/boom region
+  flow_method: "farneback"    # Optical flow method
+
+activity:
+  smoothing_window: 5         # N-frame smoothing to prevent flickering
+  vertical_flow_threshold: 1.5
+  horizontal_flow_threshold: 1.5
+
+kafka:
+  bootstrap_servers: "kafka:9092"
+  topic: "equipment-events"
+  client_id: "cv-service-producer"
+  consumer_group: "analytics-consumer"
+
+database:
+  host: "postgres"
+  port: 5432
+  name: "equipment_analytics"
+  user: "postgres"
+  password: "postgres"
+  uri: "postgresql://postgres:postgres@postgres:5432/equipment_analytics"
+
+dashboard:
+  api_url: "http://analytics-backend:8000"
+  refresh_interval: 1         # seconds
+  page_title: "Equipment Utilization Monitor"

@@ -1,0 +1,8 @@
+services:
+  construction-equipment-monitoring:
+    image: construction-equipment-monitoring
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      - 8501:8501
