@@ -2,6 +2,7 @@
 
 <cite>
 **Referenced Files in This Document**
+- [README.md](file://README.md)
 - [compose.yaml](file://compose.yaml)
 - [compose.debug.yaml](file://compose.debug.yaml)
 - [docker-compose.yml](file://docker-compose.yml)
@@ -16,25 +17,11 @@
 - [analytics-backend requirements.txt](file://services/analytics_backend/requirements.txt)
 - [dashboard requirements.txt](file://services/dashboard/requirements.txt)
 - [video-ingestion requirements.txt](file://services/video_ingestion/requirements.txt)
-- [cv-service main.py](file://services/cv_service/src/main.py)
-- [analytics-backend main.py](file://services/analytics_backend/src/main.py)
-- [dashboard app.py](file://services/dashboard/src/app.py)
-- [cv-service kafka_producer.py](file://services/cv_service/src/kafka_producer.py)
-- [analytics-backend consumer.py](file://services/analytics_backend/src/consumer.py)
-- [analytics-backend db_models.py](file://services/analytics_backend/src/db_models.py)
-- [analytics-backend api.py](file://services/analytics_backend/src/api.py)
-- [cv-service detector.py](file://services/cv_service/src/detector.py)
-- [cv-service tracker.py](file://services/cv_service/src/tracker.py)
-- [cv-service motion_analyzer.py](file://services/cv_service/src/motion_analyzer.py)
-- [cv-service activity_classifier.py](file://services/cv_service/src/activity_classifier.py)
-- [cv-service time_tracker.py](file://services/cv_service/src/time_tracker.py)
-- [video_ingestion downloader.py](file://services/video_ingestion/src/downloader.py)
-- [video_ingestion frame_producer.py](file://services/video_ingestion/src/frame_producer.py)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Updated Docker orchestration configuration to reflect new compose.yaml and compose.debug.yaml files
+- Updated Docker orchestration configuration to reflect the enhanced README.md service-specific Dockerfile approach
 - Added comprehensive microservices architecture documentation with four distinct service containers
 - Enhanced deployment procedures with new Docker configurations and debugging capabilities
 - Updated service dependencies and inter-service communication patterns
@@ -57,10 +44,10 @@
 14. [Conclusion](#conclusion)
 
 ## Introduction
-This guide provides a comprehensive, production-ready deployment plan for the equipment monitoring system. The system has evolved to a sophisticated microservices architecture with Docker Compose orchestration, featuring four distinct service containers: CV service for video processing, analytics backend for data processing, dashboard for visualization, and video ingestion service. The deployment supports both standard and debug configurations with enhanced security, scalability, and monitoring capabilities.
+This guide provides a comprehensive, production-ready deployment plan for the equipment monitoring system. The system has evolved to a sophisticated microservices architecture with Docker Compose orchestration, featuring six distinct service containers: CV service for video processing, analytics backend for data processing, dashboard for visualization, video ingestion service, ZooKeeper for Kafka coordination, and Kafka for event streaming. The deployment supports both standard and debug configurations with enhanced security, scalability, and monitoring capabilities.
 
 ## Project Structure
-The deployment is orchestrated through multiple Docker Compose files that define services, networks, volumes, and environment variables. The architecture consists of four primary microservices with specialized Docker configurations and requirements files. Configuration is centralized in a YAML file mounted into services at runtime, supporting both standard and debug deployment modes.
+The deployment is orchestrated through multiple Docker Compose files that define services, networks, volumes, and environment variables. The architecture consists of six primary microservices with specialized Docker configurations and requirements files. Configuration is centralized in a YAML file mounted into services at runtime, supporting both standard and debug deployment modes.
 
 ```mermaid
 graph TB
@@ -74,11 +61,9 @@ CV["CV Service<br/>Video Processing"]
 AB["Analytics Backend<br/>Data Processing"]
 DB["Dashboard<br/>Visualization"]
 VI["Video Ingestion<br/>Content Acquisition"]
-end
-subgraph "Infrastructure"
-ZK["Zookeeper:2181"]
-KF["Kafka:9092"]
-PG["TimescaleDB:5432"]
+ZK["ZooKeeper<br/>Kafka Coordination"]
+KF["Kafka<br/>Event Streaming"]
+PG["PostgreSQL/TimescaleDB<br/>Time-series Storage"]
 end
 subgraph "Volumes"
 V1["postgres-data"]
@@ -101,6 +86,9 @@ CD --> CV
 CD --> AB
 CD --> DB
 CD --> VI
+CD --> ZK
+CD --> KF
+CD --> PG
 DC --> ZK
 DC --> KF
 DC --> PG
@@ -121,7 +109,7 @@ DC --> V4
 - [docker-compose.yml:1-99](file://docker-compose.yml#L1-L99)
 
 ## Core Components
-The system comprises four specialized microservices, each with distinct responsibilities and Docker configurations:
+The system comprises six specialized microservices, each with distinct responsibilities and Docker configurations:
 
 ### CV Service (Computer Vision)
 - Processes video files through detection, tracking, motion analysis, activity classification, and time tracking
@@ -146,6 +134,21 @@ The system comprises four specialized microservices, each with distinct responsi
 - Processes video content for downstream computer vision analysis
 - Integrates with yt-dlp for high-quality video acquisition
 
+### ZooKeeper
+- Manages Kafka cluster coordination and metadata storage
+- Provides distributed consensus for event streaming infrastructure
+- Ensures fault tolerance and cluster membership management
+
+### Kafka
+- Apache Kafka event streaming platform
+- Handles real-time equipment event processing and distribution
+- Provides at-least-once message delivery guarantees
+
+### PostgreSQL/TimescaleDB
+- Time-series data storage optimized for monitoring workloads
+- Provides SQL interface for equipment analytics and reporting
+- Supports advanced time-series queries and aggregation
+
 **Section sources**
 - [cv-service Dockerfile:1-28](file://services/cv_service/Dockerfile#L1-L28)
 - [analytics-backend Dockerfile:1-23](file://services/analytics_backend/Dockerfile#L1-L23)
@@ -165,12 +168,14 @@ E --> F["Analytics Backend<br/>Kafka Consumer + DB Writer"]
 F --> G["TimescaleDB<br/>Time-series Storage"]
 F --> H["FastAPI :8000<br/>RESTful Endpoints"]
 H --> I["Dashboard :8501<br/>Real-time Visualization"]
+ZK["ZooKeeper :2181<br/>Cluster Coordination"] --> KF["Kafka :9092<br/>Event Streaming"]
+KF --> E
+PG["PostgreSQL/TimescaleDB :5432<br/>Data Persistence"] --> F
 ```
 
 **Diagram sources**
-- [cv-service main.py:1-200](file://services/cv_service/src/main.py#L1-L200)
-- [analytics-backend main.py:1-151](file://services/analytics_backend/src/main.py#L1-L151)
-- [dashboard app.py:1-200](file://services/dashboard/src/app.py#L1-L200)
+- [README.md:15-60](file://README.md#L15-L60)
+- [docker-compose.yml:3-99](file://docker-compose.yml#L3-L99)
 
 ## Detailed Component Analysis
 
@@ -242,9 +247,6 @@ Centralized configuration through YAML files with multiple fallback paths:
 
 **Section sources**
 - [settings.yaml](file://config/settings.yaml)
-- [cv-service main.py:76-109](file://services/cv_service/src/main.py#L76-L109)
-- [analytics-backend main.py:29-61](file://services/analytics_backend/src/main.py#L29-L61)
-- [dashboard app.py:34-56](file://services/dashboard/src/app.py#L34-L56)
 
 ### Service Startup and Health
 Comprehensive health checking and graceful shutdown mechanisms:
@@ -265,8 +267,6 @@ Comprehensive health checking and graceful shutdown mechanisms:
 - [docker-compose.yml:10-14](file://docker-compose.yml#L10-L14)
 - [docker-compose.yml:29-35](file://docker-compose.yml#L29-L35)
 - [docker-compose.yml:46-50](file://docker-compose.yml#L46-L50)
-- [cv-service main.py:154-171](file://services/cv_service/src/main.py#L154-L171)
-- [analytics-backend main.py:110-118](file://services/analytics_backend/src/main.py#L110-L118)
 
 ### Inter-Service Communication
 Robust communication patterns between microservices:
@@ -287,10 +287,8 @@ Robust communication patterns between microservices:
 - Error propagation and response formatting
 
 **Section sources**
-- [cv-service kafka_producer.py](file://services/cv_service/src/kafka_producer.py)
-- [analytics-backend consumer.py](file://services/analytics_backend/src/consumer.py)
-- [analytics-backend db_models.py](file://services/analytics_backend/src/db_models.py)
-- [analytics-backend api.py](file://services/analytics_backend/src/api.py)
+- [README.md:295-311](file://README.md#L295-L311)
+- [README.md:328-351](file://README.md#L328-L351)
 
 ## Dependency Analysis
 The microservices architecture establishes clear dependency relationships:
@@ -298,9 +296,9 @@ The microservices architecture establishes clear dependency relationships:
 ```mermaid
 graph LR
 subgraph "Infrastructure Layer"
-ZK["Zookeeper"]
+ZK["ZooKeeper"]
 KF["Kafka"]
-PG["TimescaleDB"]
+PG["PostgreSQL/TimescaleDB"]
 end
 subgraph "Processing Layer"
 CV["CV Service"]
@@ -397,9 +395,7 @@ Comprehensive observability framework:
 - Automated incident escalation procedures
 
 **Section sources**
-- [cv-service main.py:38-45](file://services/cv_service/src/main.py#L38-L45)
-- [analytics-backend main.py:18-26](file://services/analytics_backend/src/main.py#L18-L26)
-- [dashboard app.py:25-27](file://services/dashboard/src/app.py#L25-L27)
+- [README.md:295-311](file://README.md#L295-L311)
 
 ## Production Deployment Procedures
 Streamlined deployment process for microservices architecture:
@@ -442,8 +438,9 @@ Automated maintenance procedures:
 - Post-update health validation and monitoring
 
 **Section sources**
-- [cv-service main.py:154-171](file://services/cv_service/src/main.py#L154-L171)
-- [analytics-backend main.py:110-118](file://services/analytics_backend/src/main.py#L110-L118)
+- [docker-compose.yml:10-14](file://docker-compose.yml#L10-L14)
+- [docker-compose.yml:29-35](file://docker-compose.yml#L29-L35)
+- [docker-compose.yml:46-50](file://docker-compose.yml#L46-L50)
 
 ## Troubleshooting Guide
 Systematic approach to resolving deployment issues:
@@ -492,4 +489,4 @@ Comprehensive data protection strategy:
 - [docker-compose.yml:97-99](file://docker-compose.yml#L97-L99)
 
 ## Conclusion
-The equipment monitoring system deployment guide outlines a modern, production-ready microservices architecture utilizing Docker Compose orchestration. The four-service architecture provides clear separation of concerns, enhanced scalability, and improved maintainability. With comprehensive security measures, monitoring capabilities, and automated deployment procedures, teams can operate a robust and reliable pipeline from video ingestion to real-time dashboards. The transition from monolithic to microservices architecture enables better resource utilization, easier scaling, and more resilient system operations.
+The equipment monitoring system deployment guide outlines a modern, production-ready microservices architecture utilizing Docker Compose orchestration. The six-service architecture provides clear separation of concerns, enhanced scalability, and improved maintainability. With comprehensive security measures, monitoring capabilities, and automated deployment procedures, teams can operate a robust and reliable pipeline from video ingestion to real-time dashboards. The transition from monolithic to microservices architecture enables better resource utilization, easier scaling, and more resilient system operations.
