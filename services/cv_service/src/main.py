@@ -119,7 +119,8 @@ class CVServicePipeline:
         
         # Tracking component
         tracking_config = self._config.get("tracking", {})
-        self._tracker = EquipmentTracker(tracking_config)
+        reid_config = self._config.get("reid", {})
+        self._tracker = EquipmentTracker(tracking_config, reid_config=reid_config)
         logger.info("Equipment tracker initialized")
         
         # Motion analysis component
@@ -445,6 +446,9 @@ class CVServicePipeline:
         # Get time stats for this equipment
         equip_stats = time_stats.get(equipment_id, {})
         
+        # Get dwell time stats
+        dwell_stats = self._time_tracker.get_dwell_stats(equipment_id)
+        
         return {
             "frame_id": frame_id,
             "video_source": self.current_video_source,
@@ -461,6 +465,12 @@ class CVServicePipeline:
                 "total_active_seconds": equip_stats.get("total_active_seconds", 0.0),
                 "total_idle_seconds": equip_stats.get("total_idle_seconds", 0.0),
                 "utilization_percent": equip_stats.get("utilization_percent", 0.0)
+            },
+            "dwell_time": {
+                "total_idle_dwell_seconds": dwell_stats["total_idle_dwell_seconds"],
+                "current_idle_streak_seconds": dwell_stats["current_idle_streak_seconds"],
+                "times_re_identified": dwell_stats["times_re_identified"],
+                "last_activity_change": dwell_stats["last_activity_change"]
             }
         }
     
@@ -491,6 +501,12 @@ class CVServicePipeline:
         
         # 2. Track detected equipment
         tracked = self._tracker.update(detections, frame)
+        
+        # 2b. Wire Re-ID events to TimeTracker
+        for lost_id in self._tracker.last_lost_ids:
+            self._time_tracker.mark_equipment_lost(lost_id)
+        for reid_id in self._tracker.last_re_identified_ids:
+            self._time_tracker.restore_equipment(reid_id)
         
         # 3. Convert to grayscale for motion analysis
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -590,9 +606,20 @@ class CVServicePipeline:
             cv2.rectangle(annotated, (5, 5), (15 + iw, 15 + ih), COLOR_TEXT_BG, -1)
             cv2.putText(annotated, info_text, (10, 10 + ih), font, 0.6, COLOR_TEXT, 2)
             
-            # Save latest frame (overwrite)
-            latest_path = FRAME_OUTPUT_DIR / "latest_frame.jpg"
-            cv2.imwrite(str(latest_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            # Frame timestamp overlay at bottom for visual continuity
+            h, w = annotated.shape[:2]
+            equipment_count = len(tracked)
+            timestamp_text = f"Frame: {frame_id} | {time.strftime('%H:%M:%S')} | {equipment_count} equipment"
+            cv2.putText(annotated, timestamp_text, (10, h - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+            # Double-buffer write: write to temp file, then atomically rename
+            # This prevents partial reads by the MJPEG streaming endpoint
+            import shutil
+            temp_path = FRAME_OUTPUT_DIR / "latest_frame_tmp.jpg"
+            final_path = FRAME_OUTPUT_DIR / "latest_frame.jpg"
+            cv2.imwrite(str(temp_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            shutil.move(str(temp_path), str(final_path))
             
             # Save history frame
             history_path = FRAME_OUTPUT_DIR / f"frame_{frame_id:06d}.jpg"
@@ -706,7 +733,8 @@ class CVServicePipeline:
     def _reset_pipeline_components(self) -> None:
         """Reset all pipeline components for a fresh channel start."""
         tracking_config = self._config.get("tracking", {})
-        self._tracker = EquipmentTracker(tracking_config)
+        reid_config = self._config.get("reid", {})
+        self._tracker = EquipmentTracker(tracking_config, reid_config=reid_config)
         
         activity_config = self._config.get("activity", {})
         self._activity_classifier = ActivityClassifier(activity_config)

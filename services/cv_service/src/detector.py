@@ -2,7 +2,11 @@
 Equipment Detection Module
 
 This module provides equipment detection capabilities using YOLOv8 model
-for identifying vehicles/equipment (cars, buses, trucks) in video frames.
+for identifying vehicles/equipment in video frames.
+
+Supports two modes:
+- COCO mode: Uses standard COCO classes (car=2, bus=5, truck=7) as proxy
+- Custom mode: Uses fine-tuned model with construction equipment classes
 """
 
 import logging
@@ -13,6 +17,15 @@ from ultralytics import YOLO
 
 # Configure module logger
 logger = logging.getLogger(__name__)
+
+# Construction equipment class mapping for fine-tuned models
+CONSTRUCTION_CLASSES = {
+    0: 'excavator',
+    1: 'dump_truck',
+    2: 'wheel_loader',
+    3: 'crane',
+    4: 'bulldozer',
+}
 
 
 class EquipmentDetector:
@@ -44,6 +57,7 @@ class EquipmentDetector:
                 - input_size: Input image size for inference (e.g., 640)
                 - target_classes: List of COCO class IDs to detect (e.g., [2, 5, 7])
                 - class_names: Dict mapping class IDs to names (e.g., {2: "car"})
+                - custom_model: (optional) If True, skip COCO class filtering
         
         Raises:
             ValueError: If required config keys are missing.
@@ -65,8 +79,22 @@ class EquipmentDetector:
         self.target_classes = set(config['target_classes'])
         self.class_names = config['class_names']
         
-        # Load YOLOv8 model
+        # Determine if using a custom fine-tuned model
         model_path = config['model']
+        self.custom_model = config.get('custom_model', False)
+        
+        # Auto-detect custom model from path name
+        if not self.custom_model and 'construction' in str(model_path).lower():
+            self.custom_model = True
+            logger.info("Auto-detected custom construction model from path")
+        
+        # For custom models, use construction equipment class mapping
+        if self.custom_model:
+            self.class_names = {int(k): v for k, v in CONSTRUCTION_CLASSES.items()}
+            self.target_classes = set(CONSTRUCTION_CLASSES.keys())
+            logger.info(f"Custom model mode: using construction classes {list(CONSTRUCTION_CLASSES.values())}")
+        
+        # Load YOLOv8 model
         try:
             logger.info(f"Loading YOLOv8 model from: {model_path}")
             self.model = YOLO(model_path)
@@ -77,6 +105,7 @@ class EquipmentDetector:
         
         logger.info(
             f"EquipmentDetector initialized - "
+            f"custom_model: {self.custom_model}, "
             f"threshold: {self.confidence_threshold}, "
             f"target_classes: {self.target_classes}, "
             f"device: {self.device}"
@@ -145,8 +174,9 @@ class EquipmentDetector:
         
         # Filter and process detections
         for bbox, confidence, class_id in zip(boxes, confidences, class_ids):
-            # Skip if not a target class
-            if class_id not in self.target_classes:
+            # For custom models: accept all classes (they are all construction equipment)
+            # For COCO models: filter to target vehicle classes only
+            if not self.custom_model and class_id not in self.target_classes:
                 continue
             
             # Skip if below confidence threshold

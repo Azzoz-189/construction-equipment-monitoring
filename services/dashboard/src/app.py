@@ -233,6 +233,31 @@ CCTV_CSS = """
     padding: 10px;
     border-radius: 8px;
     border: 1px solid #2a2a4a;
+    transition: all 0.3s ease-in-out;
+}
+
+/* Smooth transitions for stats updates */
+.metric-card {
+    transition: all 0.3s ease-in-out;
+}
+
+.metric-value {
+    transition: color 0.3s ease-in-out;
+}
+
+/* Stream quality indicator */
+.stream-status-live {
+    color: #00ff00;
+    font-weight: 600;
+    font-size: 0.8em;
+    text-shadow: 0 0 4px rgba(0, 255, 0, 0.4);
+}
+
+.stream-status-reconnecting {
+    color: #ffaa00;
+    font-weight: 600;
+    font-size: 0.8em;
+    animation: pulse 1s infinite;
 }
 
 div[data-testid="stMetricValue"] {
@@ -300,6 +325,27 @@ def format_seconds(seconds: float) -> str:
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def format_dwell_mmss(seconds: float) -> str:
+    """Convert seconds to MM:SS format for dwell time display."""
+    if seconds is None or seconds < 0:
+        seconds = 0
+    m = int(seconds // 60)
+    s = int(seconds % 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def get_dwell_color(seconds: float) -> str:
+    """Get color for dwell time: green (<5min), yellow (5-15min), red (>15min)."""
+    if seconds is None:
+        seconds = 0
+    if seconds < 300:  # < 5 min
+        return "#22c55e"
+    elif seconds < 900:  # 5-15 min
+        return "#f59e0b"
+    else:  # > 15 min
+        return "#ef4444"
 
 
 def get_state_color(state: str) -> str:
@@ -632,6 +678,7 @@ def render_video_stream():
     stream_url = "http://localhost:8000/api/stream/mjpeg"
 
     mjpeg_html = f"""
+    <link rel="preconnect" href="http://analytics-backend:8000">
     <div id="stream-wrapper" style="width:100%; display:flex; flex-direction:column; align-items:center; background:#000; border-radius:8px; overflow:hidden; border:1px solid #2a2a4a;">
         <img id="mjpeg-stream"
              src="{stream_url}?t={int(time.time()*1000)}"
@@ -642,17 +689,21 @@ def render_video_stream():
         </div>
         <div style="width:100%; padding:6px 12px; background:#16213e; display:flex; justify-content:space-between; align-items:center;">
             <span style="color:#ef4444; font-size:0.8em; font-weight:600;">● REC</span>
+            <span id="stream-status" style="font-size:0.8em; font-weight:600; color:#00ff00; text-shadow: 0 0 4px rgba(0,255,0,0.4);">LIVE</span>
             <span style="color:#94a3b8; font-size:0.78em;">Live — equipment detection with bounding boxes</span>
-            <span id="frame-counter-bar" style="color:#94a3b8; font-size:0.78em;">Frame #---</span>
+            <span id="frame-counter-bar" style="color:#94a3b8; font-size:0.78em; transition: all 0.3s ease;">Frame #---</span>
         </div>
     </div>
     <script>
     (function() {{
         var img = document.getElementById('mjpeg-stream');
         var errDiv = document.getElementById('stream-error');
+        var statusEl = document.getElementById('stream-status');
+        var frameCounter = document.getElementById('frame-counter-bar');
         var retryCount = 0;
         var maxRetries = 120;
         var retryTimer = null;
+        var frameCount = 0;
 
         function reconnect() {{
             if (retryCount >= maxRetries) return;
@@ -665,6 +716,9 @@ def render_video_stream():
         img.onerror = function() {{
             img.style.display = 'none';
             errDiv.style.display = 'block';
+            statusEl.textContent = 'RECONNECTING...';
+            statusEl.style.color = '#ffaa00';
+            statusEl.style.textShadow = '0 0 4px rgba(255,170,0,0.4)';
             if (retryTimer) clearTimeout(retryTimer);
             retryTimer = setTimeout(reconnect, 2000);
         }};
@@ -673,12 +727,18 @@ def render_video_stream():
             img.style.display = 'block';
             errDiv.style.display = 'none';
             retryCount = 0;
+            statusEl.textContent = 'LIVE';
+            statusEl.style.color = '#00ff00';
+            statusEl.style.textShadow = '0 0 4px rgba(0,255,0,0.4)';
+            // Increment visible frame counter for stream-alive indication
+            frameCount++;
+            frameCounter.textContent = 'Frame #' + frameCount;
         }};
 
-        // Proactively reconnect every 55s before server-side timeout
+        // Proactively reconnect every 115s before server-side 120s timeout
         setInterval(function() {{
             reconnect();
-        }}, 55000);
+        }}, 115000);
     }})();
     </script>
     """
@@ -742,6 +802,36 @@ def render_stats_fragment():
                     unsafe_allow_html=True,
                 )
 
+    # --- Longest Idle & Re-ID metric cards ---
+    if equipment_list:
+        # Find equipment with longest current idle streak
+        longest_idle_eq = max(
+            equipment_list,
+            key=lambda e: (e.get("current_idle_streak_seconds") or 0),
+            default=None,
+        )
+        total_re_ids = sum(e.get("times_re_identified", 0) or 0 for e in equipment_list)
+
+        if longest_idle_eq:
+            idle_secs = longest_idle_eq.get("current_idle_streak_seconds", 0) or 0
+            idle_id = longest_idle_eq.get("equipment_id", "N/A")
+            dw_color = get_dwell_color(idle_secs)
+            d_cols = st.columns(2)
+            with d_cols[0]:
+                st.markdown(
+                    f'<div class="metric-card">'
+                    f'<div class="metric-value" style="color:{dw_color};">{format_dwell_mmss(idle_secs)}</div>'
+                    f'<div class="metric-label">Longest Idle ({idle_id})</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with d_cols[1]:
+                st.markdown(
+                    f'<div class="metric-card">'
+                    f'<div class="metric-value" style="color:#6366f1;">{total_re_ids}</div>'
+                    f'<div class="metric-label">Re-ID Count</div></div>',
+                    unsafe_allow_html=True,
+                )
+
     # --- Live Equipment Status Table ---
     st.markdown(
         '<div class="monitor-panel">'
@@ -778,15 +868,21 @@ def render_stats_fragment():
         state = eq.get("current_state", "UNKNOWN")
         activity = eq.get("current_activity", "UNKNOWN")
         utilization = eq.get("utilization_percent", 0)
+        idle_dwell = eq.get("current_idle_streak_seconds", 0) or 0
+        re_id_count = eq.get("times_re_identified", 0) or 0
         state_color = "#22c55e" if state == "ACTIVE" else "#ef4444"
         act_color = activity_colors.get(activity, "#6b7280")
+        dwell_color = get_dwell_color(idle_dwell)
+        dwell_display = format_dwell_mmss(idle_dwell)
+        re_id_badge = f' <span style="background:#6366f1;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;">Re-ID x{re_id_count}</span>' if re_id_count > 0 else ""
 
         rows_html += f"""
         <tr>
-            <td style="font-weight:600;">{eq_id}</td>
+            <td style="font-weight:600;">{eq_id}{re_id_badge}</td>
             <td>{eq_class.title()}</td>
             <td><span style="color:{state_color}; font-weight:700;">● {state}</span></td>
             <td><span style="background:{act_color}; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px;">{activity}</span></td>
+            <td><span style="color:{dwell_color}; font-weight:600;">{dwell_display}</span></td>
             <td>
                 <div style="display:flex; align-items:center; gap:6px;">
                     <div style="flex:1; height:6px; background:#1e293b; border-radius:3px; overflow:hidden;">
@@ -847,6 +943,7 @@ def render_stats_fragment():
                     <th>Class</th>
                     <th>State</th>
                     <th>Activity</th>
+                    <th>Dwell Time</th>
                     <th>Utilization</th>
                 </tr>
             </thead>

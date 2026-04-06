@@ -173,6 +173,7 @@ class AnalyticsConsumer:
             # Extract nested fields
             utilization = message.get("utilization", {})
             time_analytics = message.get("time_analytics", {})
+            dwell_time = message.get("dwell_time", {})
             
             # Create database record
             event = EquipmentEvent(
@@ -187,6 +188,9 @@ class AnalyticsConsumer:
                 total_active_seconds=time_analytics.get("total_active_seconds", 0.0),
                 total_idle_seconds=time_analytics.get("total_idle_seconds", 0.0),
                 utilization_percent=time_analytics.get("utilization_percent", 0.0),
+                total_idle_dwell_seconds=dwell_time.get("total_idle_dwell_seconds", 0.0),
+                current_idle_streak_seconds=dwell_time.get("current_idle_streak_seconds", 0.0),
+                times_re_identified=dwell_time.get("times_re_identified", 0),
                 video_source=message.get("video_source"),
             )
             

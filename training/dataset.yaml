@@ -1,0 +1,15 @@
+# Construction Equipment Detection Dataset
+# Used for fine-tuning YOLOv8n
+
+path: ./datasets/construction_equipment
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 5
+names:
+  0: excavator
+  1: dump_truck
+  2: wheel_loader
+  3: crane
+  4: bulldozer

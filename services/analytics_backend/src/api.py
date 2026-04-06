@@ -84,6 +84,9 @@ class EquipmentSummary(BaseModel):
     current_state: str
     current_activity: str
     utilization_percent: float
+    total_idle_dwell_seconds: float = 0.0
+    current_idle_streak_seconds: float = 0.0
+    times_re_identified: int = 0
     last_seen: Optional[str] = None
     
     class Config:
@@ -118,6 +121,9 @@ class EquipmentUtilizationSummary(BaseModel):
     total_active_seconds: float
     total_idle_seconds: float
     utilization_percent: float
+    total_idle_dwell_seconds: float = 0.0
+    current_idle_streak_seconds: float = 0.0
+    times_re_identified: int = 0
     event_count: int
 
 
@@ -127,6 +133,8 @@ class UtilizationSummaryResponse(BaseModel):
     active_count: int
     inactive_count: int
     avg_utilization: float
+    avg_idle_dwell: float = 0.0
+    max_idle_dwell: float = 0.0
     equipment: List[EquipmentUtilizationSummary]
 
 
@@ -215,6 +223,9 @@ async def list_equipment(channel: Optional[str] = None, db: Session = Depends(ge
                 current_state=event.current_state,
                 current_activity=event.current_activity,
                 utilization_percent=event.utilization_percent,
+                total_idle_dwell_seconds=event.total_idle_dwell_seconds or 0.0,
+                current_idle_streak_seconds=event.current_idle_streak_seconds or 0.0,
+                times_re_identified=event.times_re_identified or 0,
                 last_seen=event.created_at.isoformat() if event.created_at else None
             )
             for event in latest_events
@@ -354,15 +365,25 @@ async def get_utilization_summary(channel: Optional[str] = None, db: Session = D
                     total_active_seconds=event.total_active_seconds,
                     total_idle_seconds=event.total_idle_seconds,
                     utilization_percent=event.utilization_percent,
+                    total_idle_dwell_seconds=event.total_idle_dwell_seconds or 0.0,
+                    current_idle_streak_seconds=event.current_idle_streak_seconds or 0.0,
+                    times_re_identified=event.times_re_identified or 0,
                     event_count=event_count
                 )
             )
+        
+        # Calculate dwell time aggregates
+        dwell_values = [e.total_idle_dwell_seconds or 0.0 for e in latest_events]
+        avg_idle_dwell = sum(dwell_values) / len(dwell_values) if dwell_values else 0.0
+        max_idle_dwell = max(dwell_values) if dwell_values else 0.0
         
         return UtilizationSummaryResponse(
             total_equipment=len(latest_events),
             active_count=active_count,
             inactive_count=inactive_count,
             avg_utilization=round(avg_utilization, 2),
+            avg_idle_dwell=round(avg_idle_dwell, 2),
+            max_idle_dwell=round(max_idle_dwell, 2),
             equipment=equipment_summaries
         )
         
@@ -491,7 +512,7 @@ async def stream_mjpeg():
     """
     MJPEG stream endpoint for continuous real-time frame streaming.
     Returns multipart/x-mixed-replace stream of annotated JPEG frames.
-    Auto-closes after ~60 seconds to prevent stale connection pile-up.
+    Auto-closes after ~120 seconds to prevent stale connection pile-up.
     """
     import time as _time
     frame_dir = Path("/app/frames")
@@ -500,7 +521,7 @@ async def stream_mjpeg():
         last_mtime = 0
         last_data = None
         start = _time.monotonic()
-        max_duration = 60  # Close after 60s; client JS will reconnect
+        max_duration = 120  # Close after 120s; client JS will reconnect
         frames_sent = 0
         
         while (_time.monotonic() - start) < max_duration:
@@ -512,36 +533,37 @@ async def stream_mjpeg():
                     
                     if current_mtime != last_mtime:
                         last_mtime = current_mtime
-                        with open(latest_frame_path, "rb") as f:
-                            frame_data = f.read()
+                        # Use async file I/O to prevent blocking the event loop
+                        frame_data = await asyncio.to_thread(latest_frame_path.read_bytes)
                         
                         if len(frame_data) > 0:
                             last_data = frame_data
                             yield (
                                 b'--frame\r\n'
                                 b'Content-Type: image/jpeg\r\n'
-                                b'Content-Length: ' + str(len(frame_data)).encode() + b'\r\n\r\n'
-                                + frame_data + b'\r\n'
+                                b'Content-Length: ' + str(len(frame_data)).encode() + b'\r\n'
+                                b'Cache-Control: no-cache, no-store\r\n'
+                                b'\r\n' + frame_data + b'\r\n'
                             )
                             frames_sent += 1
                     elif frames_sent == 0 and last_data is None:
                         # First request and frame exists but mtime unchanged:
                         # send it once so the client sees something immediately
-                        with open(latest_frame_path, "rb") as f:
-                            frame_data = f.read()
+                        frame_data = await asyncio.to_thread(latest_frame_path.read_bytes)
                         if len(frame_data) > 0:
                             last_data = frame_data
                             last_mtime = current_mtime
                             yield (
                                 b'--frame\r\n'
                                 b'Content-Type: image/jpeg\r\n'
-                                b'Content-Length: ' + str(len(frame_data)).encode() + b'\r\n\r\n'
-                                + frame_data + b'\r\n'
+                                b'Content-Length: ' + str(len(frame_data)).encode() + b'\r\n'
+                                b'Cache-Control: no-cache, no-store\r\n'
+                                b'\r\n' + frame_data + b'\r\n'
                             )
                             frames_sent += 1
                 
-                # Poll at ~10Hz (balance between responsiveness and CPU)
-                await asyncio.sleep(0.1)
+                # Poll at ~15Hz for smoother streaming (~67ms interval)
+                await asyncio.sleep(0.067)
                 
             except GeneratorExit:
                 return

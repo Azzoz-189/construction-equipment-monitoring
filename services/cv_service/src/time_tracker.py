@@ -12,6 +12,7 @@ Metrics tracked per equipment:
 """
 
 import logging
+import time as _time
 from typing import Optional
 
 # Configure module logger
@@ -47,6 +48,15 @@ class TimeTracker:
         
         # Track last processed timestamp (not currently used, but useful for debugging)
         self._last_timestamp: Optional[str] = None
+        
+        # History buffer for equipment that lost tracking (for Re-ID restoration)
+        # equipment_id -> {stats_snapshot, lost_time}
+        self._equipment_history: dict[str, dict] = {}
+        
+        # Dwell time tracking per equipment
+        # equipment_id -> {current_idle_streak_seconds, total_idle_dwell_seconds,
+        #                   times_re_identified, last_activity_change, last_state}
+        self._dwell_data: dict[str, dict] = {}
         
         logger.info("TimeTracker initialized")
     
@@ -100,9 +110,36 @@ class TimeTracker:
                     "total_idle_seconds": 0.0
                 }
             
+            # Initialize dwell data for new equipment
+            if equipment_id not in self._dwell_data:
+                self._dwell_data[equipment_id] = {
+                    "current_idle_streak_seconds": 0.0,
+                    "total_idle_dwell_seconds": 0.0,
+                    "times_re_identified": 0,
+                    "last_activity_change": frame_timestamp,
+                    "last_state": self.STATE_INACTIVE,
+                }
+            
             # Get current state from activity classification
             activity_info = activities.get(equipment_id, {})
             current_state = activity_info.get('current_state', self.STATE_INACTIVE)
+            
+            # Update dwell tracking
+            dwell = self._dwell_data[equipment_id]
+            prev_state = dwell["last_state"]
+            
+            if current_state != prev_state:
+                # State changed — record the transition timestamp
+                dwell["last_activity_change"] = frame_timestamp
+                dwell["last_state"] = current_state
+                if current_state == self.STATE_ACTIVE:
+                    # Became active → reset idle streak
+                    dwell["current_idle_streak_seconds"] = 0.0
+            
+            # Update idle streak and total idle dwell
+            if current_state != self.STATE_ACTIVE:
+                dwell["current_idle_streak_seconds"] += time_delta
+                dwell["total_idle_dwell_seconds"] += time_delta
             
             # Update time counters
             stats = self._equipment_stats[equipment_id]
@@ -198,6 +235,105 @@ class TimeTracker:
             for equipment_id in self._equipment_stats
         }
     
+    def mark_equipment_lost(self, equipment_id: str) -> None:
+        """
+        Save stats for equipment that lost tracking (left frame).
+        
+        Preserves accumulated stats in history so they can be restored
+        if the equipment is re-identified later.
+        
+        Args:
+            equipment_id: Equipment identifier
+        """
+        stats = self._equipment_stats.get(equipment_id)
+        dwell = self._dwell_data.get(equipment_id)
+        if stats is not None:
+            self._equipment_history[equipment_id] = {
+                "stats_snapshot": dict(stats),
+                "dwell_snapshot": dict(dwell) if dwell else None,
+                "lost_time": _time.monotonic(),
+            }
+            logger.debug(
+                f"Equipment {equipment_id} marked lost — stats preserved "
+                f"(tracked={stats['total_tracked_seconds']:.1f}s)"
+            )
+    
+    def restore_equipment(self, equipment_id: str) -> None:
+        """
+        Restore accumulated stats for re-identified equipment.
+        
+        If the equipment was previously tracked and then lost, this method
+        restores its stats from history and adds the absent duration as idle time.
+        
+        Args:
+            equipment_id: Equipment identifier that was re-identified
+        """
+        history = self._equipment_history.pop(equipment_id, None)
+        if history is None:
+            logger.debug(f"No history for equipment {equipment_id}, nothing to restore")
+            return
+        
+        snapshot = history["stats_snapshot"]
+        dwell_snapshot = history.get("dwell_snapshot")
+        lost_time = history["lost_time"]
+        absent_duration = _time.monotonic() - lost_time
+        
+        # Restore base stats and add absent duration as idle
+        self._equipment_stats[equipment_id] = {
+            "total_tracked_seconds": snapshot["total_tracked_seconds"] + absent_duration,
+            "total_active_seconds": snapshot["total_active_seconds"],
+            "total_idle_seconds": snapshot["total_idle_seconds"] + absent_duration,
+        }
+        
+        # Restore dwell data
+        if dwell_snapshot:
+            self._dwell_data[equipment_id] = {
+                "current_idle_streak_seconds": dwell_snapshot["current_idle_streak_seconds"] + absent_duration,
+                "total_idle_dwell_seconds": dwell_snapshot["total_idle_dwell_seconds"] + absent_duration,
+                "times_re_identified": dwell_snapshot["times_re_identified"] + 1,
+                "last_activity_change": dwell_snapshot["last_activity_change"],
+                "last_state": self.STATE_INACTIVE,
+            }
+        else:
+            self._dwell_data[equipment_id] = {
+                "current_idle_streak_seconds": absent_duration,
+                "total_idle_dwell_seconds": absent_duration,
+                "times_re_identified": 1,
+                "last_activity_change": self._last_timestamp or "00:00:00.000",
+                "last_state": self.STATE_INACTIVE,
+            }
+        
+        logger.info(
+            f"Equipment {equipment_id} restored via Re-ID — "
+            f"absent {absent_duration:.1f}s added as idle, "
+            f"re-ID count={self._dwell_data[equipment_id]['times_re_identified']}"
+        )
+    
+    def get_dwell_stats(self, equipment_id: str) -> dict:
+        """
+        Get dwell time statistics for a specific equipment.
+        
+        Args:
+            equipment_id: Equipment identifier
+        
+        Returns:
+            Dict with dwell time statistics
+        """
+        dwell = self._dwell_data.get(equipment_id)
+        if dwell is None:
+            return {
+                "total_idle_dwell_seconds": 0.0,
+                "current_idle_streak_seconds": 0.0,
+                "times_re_identified": 0,
+                "last_activity_change": "00:00:00.000",
+            }
+        return {
+            "total_idle_dwell_seconds": dwell["total_idle_dwell_seconds"],
+            "current_idle_streak_seconds": dwell["current_idle_streak_seconds"],
+            "times_re_identified": dwell["times_re_identified"],
+            "last_activity_change": dwell["last_activity_change"],
+        }
+    
     def reset(self) -> None:
         """
         Reset all time tracking statistics.
@@ -207,6 +343,8 @@ class TimeTracker:
         """
         self._equipment_stats.clear()
         self._last_timestamp = None
+        self._equipment_history.clear()
+        self._dwell_data.clear()
         logger.debug("TimeTracker statistics reset")
     
     def get_equipment_ids(self) -> list:

@@ -7,10 +7,12 @@ across video frames.
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import supervision as sv
+
+from .reid_engine import ReIDEngine
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ class EquipmentTracker:
         track_classes: Mapping from track IDs to their equipment classes.
     """
     
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, reid_config: Optional[dict] = None) -> None:
         """
         Initialize ByteTrack tracker via supervision library.
         
@@ -43,6 +45,8 @@ class EquipmentTracker:
                 - match_thresh: IOU threshold for matching detections to tracks
                 - equipment_id_prefix: Dict mapping class names to ID prefixes
                   (e.g., {truck: "DT", car: "VH", bus: "BU", default: "EQ"})
+            reid_config: Optional Re-ID engine configuration dict.
+                If provided, enables appearance-based re-identification.
         
         Raises:
             ValueError: If required config keys are missing.
@@ -74,6 +78,19 @@ class EquipmentTracker:
         
         # Per-class counters for generating sequential equipment IDs
         self.class_counters: dict[str, int] = {}
+        
+        # Track previous frame's track_ids for lost track detection
+        self._previous_track_ids: set[int] = set()
+        
+        # Track re-identified and lost equipment IDs from the last update()
+        self._last_re_identified_ids: list[str] = []
+        self._last_lost_ids: list[str] = []
+        
+        # Initialize Re-ID engine
+        if reid_config is not None:
+            self.reid_engine = ReIDEngine(reid_config)
+        else:
+            self.reid_engine = ReIDEngine({'enabled': False})
         
         logger.info(
             f"EquipmentTracker initialized - "
@@ -223,9 +240,14 @@ class EquipmentTracker:
             logger.debug("No tracker IDs assigned")
             return tracked_objects
         
+        # Collect current frame's track IDs for lost track detection
+        current_track_ids: set[int] = set()
+        re_identified_ids: list[str] = []
+        
         # Process each tracked detection
         for i, track_id in enumerate(tracker_ids):
             track_id = int(track_id)
+            current_track_ids.add(track_id)
             
             # Get detection data
             bbox = tracked_detections.xyxy[i].tolist()
@@ -240,15 +262,36 @@ class EquipmentTracker:
             
             # Check if this track already has an equipment ID assigned
             if track_id not in self.track_to_equipment_id:
-                # New track - assign equipment ID
-                equipment_id = self._generate_equipment_id(class_name)
-                self.track_to_equipment_id[track_id] = equipment_id
-                self.track_classes[track_id] = class_name
-                logger.info(f"New track assigned: track_id={track_id} -> equipment_id={equipment_id}")
+                # New track — try Re-ID before generating a new equipment ID
+                frame_shape = (frame.shape[0], frame.shape[1])
+                reid_match = self.reid_engine.try_reidentify(frame, tuple(bbox), frame_shape)
+                
+                if reid_match is not None:
+                    # Re-identified as previously lost equipment
+                    equipment_id = reid_match
+                    self.track_to_equipment_id[track_id] = equipment_id
+                    self.track_classes[track_id] = class_name
+                    re_identified_ids.append(equipment_id)
+                    logger.info(
+                        f"Re-ID match: track_id={track_id} -> "
+                        f"equipment_id={equipment_id} (recovered)"
+                    )
+                else:
+                    # Truly new equipment — generate new ID
+                    equipment_id = self._generate_equipment_id(class_name)
+                    self.track_to_equipment_id[track_id] = equipment_id
+                    self.track_classes[track_id] = class_name
+                    logger.info(
+                        f"New track assigned: track_id={track_id} -> "
+                        f"equipment_id={equipment_id}"
+                    )
             else:
                 # Existing track - use existing equipment ID
                 equipment_id = self.track_to_equipment_id[track_id]
                 class_name = self.track_classes.get(track_id, class_name)
+            
+            # Update Re-ID engine with current appearance features
+            self.reid_engine.update_active_track(equipment_id, frame, tuple(bbox))
             
             tracked_object = {
                 "equipment_id": equipment_id,
@@ -258,6 +301,26 @@ class EquipmentTracker:
                 "track_id": track_id
             }
             tracked_objects.append(tracked_object)
+        
+        # Detect lost tracks (were active last frame but not this frame)
+        lost_track_ids = self._previous_track_ids - current_track_ids
+        lost_equipment_ids: list[str] = []
+        for lost_tid in lost_track_ids:
+            lost_equipment_id = self.track_to_equipment_id.get(lost_tid)
+            if lost_equipment_id:
+                self.reid_engine.mark_track_lost(lost_equipment_id)
+                lost_equipment_ids.append(lost_equipment_id)
+                logger.debug(
+                    f"Track lost: track_id={lost_tid}, "
+                    f"equipment_id={lost_equipment_id} -> Re-ID buffer"
+                )
+        
+        # Store re-identified and lost IDs for external consumers
+        self._last_re_identified_ids = re_identified_ids
+        self._last_lost_ids = lost_equipment_ids
+        
+        # Update previous track IDs for next frame
+        self._previous_track_ids = current_track_ids
         
         logger.debug(f"Tracking {len(tracked_objects)} equipment objects")
         
@@ -330,7 +393,8 @@ class EquipmentTracker:
         """
         Reset the tracker state.
         
-        Clears all track mappings and counters, effectively starting fresh.
+        Clears all track mappings, counters, and Re-ID buffers,
+        effectively starting fresh.
         Useful when processing a new video or after significant scene changes.
         """
         logger.info("Resetting tracker state")
@@ -338,3 +402,17 @@ class EquipmentTracker:
         self.track_to_equipment_id.clear()
         self.track_classes.clear()
         self.class_counters.clear()
+        self._previous_track_ids.clear()
+        self._last_re_identified_ids.clear()
+        self._last_lost_ids.clear()
+        self.reid_engine.reset()
+    
+    @property
+    def last_re_identified_ids(self) -> list[str]:
+        """Equipment IDs that were re-identified in the last update() call."""
+        return self._last_re_identified_ids
+    
+    @property
+    def last_lost_ids(self) -> list[str]:
+        """Equipment IDs that were lost (left frame) in the last update() call."""
+        return self._last_lost_ids

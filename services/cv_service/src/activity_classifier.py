@@ -19,6 +19,22 @@ from typing import Optional
 # Configure module logger
 logger = logging.getLogger(__name__)
 
+# Lazy import to avoid circular dependency at module level
+_LSTMActivityClassifier = None
+
+
+def _get_lstm_classifier_class():
+    """Lazy-load LSTMActivityClassifier to avoid circular imports."""
+    global _LSTMActivityClassifier
+    if _LSTMActivityClassifier is None:
+        try:
+            from .lstm_classifier import LSTMActivityClassifier
+            _LSTMActivityClassifier = LSTMActivityClassifier
+        except ImportError:
+            logger.warning("LSTMActivityClassifier not available")
+            _LSTMActivityClassifier = False  # Sentinel: tried and failed
+    return _LSTMActivityClassifier if _LSTMActivityClassifier is not False else None
+
 
 class ActivityClassifier:
     """
@@ -53,6 +69,8 @@ class ActivityClassifier:
                 - smoothing_window (int): N-frame smoothing window size (default: 5)
                 - vertical_flow_threshold (float): Threshold for vertical motion (default: 1.5)
                 - horizontal_flow_threshold (float): Threshold for horizontal motion (default: 1.5)
+                - classifier_type (str): 'rule_based', 'lstm', or 'hybrid' (default: 'rule_based')
+                - lstm (dict): LSTM-specific configuration (see LSTMActivityClassifier)
         """
         self.smoothing_window = config.get('smoothing_window', 5)
         self.vertical_flow_threshold = config.get('vertical_flow_threshold', 1.5)
@@ -62,16 +80,34 @@ class ActivityClassifier:
         # Maps equipment_id -> deque of recent raw classifications
         self._activity_history: dict[str, deque] = {}
         
+        # LSTM classifier (optional enhancement layer)
+        self.classifier_type = config.get('classifier_type', 'rule_based')
+        self.lstm_classifier = None
+        
+        if self.classifier_type in ('lstm', 'hybrid'):
+            LSTMCls = _get_lstm_classifier_class()
+            if LSTMCls is not None:
+                lstm_config = config.get('lstm', {})
+                self.lstm_classifier = LSTMCls(lstm_config)
+                logger.info("LSTM activity classifier enabled (mode=%s)", self.classifier_type)
+            else:
+                logger.warning(
+                    "LSTM classifier requested but not available — falling back to rule-based"
+                )
+                self.classifier_type = 'rule_based'
+        
         logger.info(
             f"ActivityClassifier initialized: smoothing_window={self.smoothing_window}, "
             f"vertical_threshold={self.vertical_flow_threshold}, "
-            f"horizontal_threshold={self.horizontal_flow_threshold}"
+            f"horizontal_threshold={self.horizontal_flow_threshold}, "
+            f"classifier_type={self.classifier_type}"
         )
     
     def classify(
         self,
         tracked_objects: list[dict],
-        motion_results: list[dict]
+        motion_results: list[dict],
+        frame_shape: tuple = None,
     ) -> dict:
         """
         Classify activity for each tracked equipment based on motion analysis.
@@ -80,6 +116,7 @@ class ActivityClassifier:
             tracked_objects: From tracker.update() - list with equipment_id, bbox, etc.
             motion_results: From motion_analyzer.analyze() - list with equipment_id,
                            motion_source, dominant_direction, flow_vectors, etc.
+            frame_shape: Frame dimensions (height, width) for LSTM feature extraction.
         
         Returns:
             dict mapping equipment_id -> {
@@ -96,30 +133,47 @@ class ActivityClassifier:
         
         for obj in tracked_objects:
             equipment_id = obj.get('equipment_id', 'unknown')
+            bbox = obj.get('bbox', (0, 0, 0, 0))
             
             # Get motion data for this equipment
             motion_data = motion_map.get(equipment_id, self._empty_motion_data())
-            
-            # Classify raw activity based on motion rules
-            raw_activity = self._classify_raw_activity(motion_data)
-            
-            # Apply N-frame smoothing
-            smoothed_activity = self._apply_smoothing(equipment_id, raw_activity)
-            
-            # Determine state from activity
-            current_state = (
-                self.STATE_INACTIVE 
-                if smoothed_activity == self.ACTIVITY_WAITING 
-                else self.STATE_ACTIVE
-            )
-            
             motion_source = motion_data.get('motion_source', 'none')
+            
+            # Try LSTM classifier if available
+            lstm_result = None
+            if self.lstm_classifier is not None and frame_shape is not None:
+                lstm_result = self.lstm_classifier.update(
+                    equipment_id, motion_data, tuple(bbox), frame_shape
+                )
+            
+            # Determine activity based on classifier_type
+            if lstm_result is not None and self.classifier_type == 'lstm':
+                # Pure LSTM mode — always use LSTM result
+                smoothed_activity = lstm_result['activity']
+                current_state = lstm_result['state']
+            elif (
+                lstm_result is not None
+                and self.classifier_type == 'hybrid'
+                and lstm_result.get('method') == 'lstm'
+            ):
+                # Hybrid mode — use LSTM only when it has high-confidence prediction
+                smoothed_activity = lstm_result['activity']
+                current_state = lstm_result['state']
+            else:
+                # Rule-based fallback (default)
+                raw_activity = self._classify_raw_activity(motion_data)
+                smoothed_activity = self._apply_smoothing(equipment_id, raw_activity)
+                current_state = (
+                    self.STATE_INACTIVE
+                    if smoothed_activity == self.ACTIVITY_WAITING
+                    else self.STATE_ACTIVE
+                )
             
             results[equipment_id] = {
                 "current_state": current_state,
                 "current_activity": smoothed_activity,
                 "activity": smoothed_activity,  # Alias for main.py compatibility
-                "motion_source": motion_source
+                "motion_source": motion_source,
             }
         
         return results
@@ -288,6 +342,8 @@ class ActivityClassifier:
     def reset(self) -> None:
         """Reset all activity history buffers (e.g., for new video)."""
         self._activity_history.clear()
+        if self.lstm_classifier is not None:
+            self.lstm_classifier.reset()
         logger.debug("ActivityClassifier history reset")
     
     def get_history(self, equipment_id: str) -> Optional[list]:

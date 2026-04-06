@@ -40,6 +40,9 @@ class EquipmentEvent(Base):
     total_active_seconds = Column(Float, default=0.0)
     total_idle_seconds = Column(Float, default=0.0)
     utilization_percent = Column(Float, default=0.0)
+    total_idle_dwell_seconds = Column(Float, default=0.0)
+    current_idle_streak_seconds = Column(Float, default=0.0)
+    times_re_identified = Column(Integer, default=0)
     video_source = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
     
@@ -64,6 +67,9 @@ class EquipmentEvent(Base):
             "total_active_seconds": self.total_active_seconds,
             "total_idle_seconds": self.total_idle_seconds,
             "utilization_percent": self.utilization_percent,
+            "total_idle_dwell_seconds": self.total_idle_dwell_seconds,
+            "current_idle_streak_seconds": self.current_idle_streak_seconds,
+            "times_re_identified": self.times_re_identified,
             "video_source": self.video_source,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
