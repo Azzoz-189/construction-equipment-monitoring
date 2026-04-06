@@ -2,6 +2,12 @@
 
 A real-time microservices pipeline for construction equipment monitoring using computer vision, Apache Kafka event streaming, and a Streamlit dashboard. This prototype detects, tracks, and classifies equipment activity states (DIGGING, SWINGING_LOADING, DUMPING, WAITING) from video feeds, providing live utilization metrics.
 
+## Demo
+
+![Real-time Equipment Monitoring Demo](demo.gif)
+
+*The dashboard shows live MJPEG video feed with bounding box annotations, equipment status tracking, and utilization metrics updating in real-time.*
+
 ---
 
 ## Architecture Overview
@@ -89,8 +95,8 @@ A real-time microservices pipeline for construction equipment monitoring using c
 
 ### 1. Clone the Repository
 ```bash
-git clone <repository-url>
-cd Task-2_Technical Occupational Equipment Activity
+git clone https://github.com/Azzoz-189/construction-equipment-monitoring.git
+cd construction-equipment-monitoring
 ```
 
 ### 2. Add Video URLs
