@@ -58,3 +58,9 @@ extracted_content.txt
 # Model weights (downloaded at runtime)
 *.pt
 *.onnx
+# Exception: keep fine-tuned construction model
+!models/construction_yolov8n.pt
+
+# Training artifacts (large datasets and run outputs)
+training/datasets/
+training/runs/

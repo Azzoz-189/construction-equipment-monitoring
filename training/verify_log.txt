@@ -1,0 +1,20 @@
+=== Model Verification ===
+Loading model from /app/models/construction_yolov8n.pt
+Model classes: {0: 'heavy_equipment', 1: 'dump_truck', 2: 'vehicle'}
+Test images: 14
+  bootstrap_000012.jpg: 4 detections
+    dump_truck: 0.993
+    dump_truck: 0.979
+    vehicle: 0.605
+    vehicle: 0.285
+  bootstrap_000022.jpg: 2 detections
+    dump_truck: 0.985
+    vehicle: 0.421
+  bootstrap_000026.jpg: 1 detections
+    dump_truck: 0.989
+  bootstrap_000035.jpg: 1 detections
+    dump_truck: 0.813
+  bootstrap_000057.jpg: 1 detections
+    dump_truck: 0.808
+Total detections in 5 test images: 9
+=== Verification DONE ===

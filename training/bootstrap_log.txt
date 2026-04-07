@@ -1,0 +1,8 @@
+=== Bootstrap Dataset Runner ===
+Cleaned up previous run at /app/training/datasets/bootstrap
+Importing YOLO...
+
+--- Step 1: Extracting frames from videos ---
+Found 7 videos
+  Video 1/7: Bagger Hitachi 490, CAT 326 Großbaustelle.f136.mp4
+    Frames: 19515, FPS: 30.0, extracting every 30th

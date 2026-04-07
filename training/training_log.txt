@@ -1,0 +1,3 @@
+=== YOLOv8 Fine-tuning Script ===
+
+--- Phase 1: Quick 3-epoch test ---

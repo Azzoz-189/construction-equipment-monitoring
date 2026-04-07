@@ -6,35 +6,46 @@ video:
   input_dir: "/app/videos"   # Video files directory
 
 detection:
-  model: "yolov8n.pt"              # Default COCO model
-  # model: "models/construction_yolov8n.pt"  # Uncomment after fine-tuning
-  custom_model: false               # Set to true when using fine-tuned model
-  confidence_threshold: 0.4
+  model: "models/construction_yolov8n.pt"   # Fine-tuned construction equipment model
+  custom_model: true                        # Using fine-tuned model with construction classes
+  confidence_threshold: 0.35
   device: "cpu"
   input_size: 640
-  # COCO class IDs to detect (truck=7, car=2, bus=5) - used when custom_model: false
-  target_classes: [2, 5, 7]
-  # Friendly names mapping
+  # target_classes not needed when custom_model: true
+  target_classes: [0, 1, 2]
+  # Class names for fine-tuned model (auto-overridden when custom_model: true)
   class_names:
-    2: "car"
-    5: "bus"
-    7: "truck"
+    0: "heavy_equipment"
+    1: "dump_truck"
+    2: "vehicle"
+  # To revert to COCO model:
+  # model: "yolov8n.pt"
+  # custom_model: false
+  # confidence_threshold: 0.4
+  # target_classes: [2, 5, 7]
+  # class_names:
+  #   2: "car"
+  #   5: "bus"
+  #   7: "truck"
 
 tracking:
   track_thresh: 0.25
   track_buffer: 90
   match_thresh: 0.8
   equipment_id_prefix:
+    # Construction equipment classes (fine-tuned model)
+    heavy_equipment: "HE"
+    dump_truck: "DT"
+    vehicle: "VH"
+    # Extended construction equipment classes
+    excavator: "EX"
+    wheel_loader: "WL"
+    crane: "CR"
+    bulldozer: "BD"
     # COCO classes (backward compatible)
     truck: "DT"
     car: "VH"
     bus: "BU"
-    # Construction equipment classes
-    excavator: "EX"
-    dump_truck: "DT"
-    wheel_loader: "WL"
-    crane: "CR"
-    bulldozer: "BD"
     default: "EQ"
 
 reid:

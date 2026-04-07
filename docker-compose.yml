@@ -60,6 +60,8 @@ services:
       - ./videos:/app/videos
       - ./config:/app/config
       - ./frames:/app/frames
+      - ./training:/app/training
+      - ./models:/app/models
     environment:
       PYTHONUNBUFFERED: "1"
 

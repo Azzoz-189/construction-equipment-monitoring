@@ -25,15 +25,23 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+# Resolve script directory safely (works in Docker exec, standalone, etc.)
+try:
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _SCRIPT_DIR = os.path.abspath("training")
+
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+
 # COCO class IDs that map to construction equipment
 COCO_TO_CONSTRUCTION = {
-    2: 0,   # car -> excavator (proxy: small vehicles on site)
-    5: 3,   # bus -> crane (proxy: large vehicles)
+    2: 2,   # car -> vehicle (small vehicles on site)
+    5: 0,   # bus -> heavy_equipment (large vehicles / heavy machinery)
     7: 1,   # truck -> dump_truck (direct mapping)
 }
 
-# Construction equipment class names
-CONSTRUCTION_CLASSES = ["excavator", "dump_truck", "wheel_loader", "crane", "bulldozer"]
+# Construction equipment class names (bootstrap classes)
+CONSTRUCTION_CLASSES = ["heavy_equipment", "dump_truck", "vehicle"]
 
 
 def extract_frames_from_video(
@@ -295,7 +303,7 @@ def create_dataset_yaml(output_dir: str, yaml_path: str) -> str:
         "val": "valid/images",
         "test": "test/images",
         "nc": len(CONSTRUCTION_CLASSES),
-        "names": CONSTRUCTION_CLASSES,
+        "names": {i: name for i, name in enumerate(CONSTRUCTION_CLASSES)},
     }
 
     with open(yaml_path, "w") as f:
@@ -312,19 +320,19 @@ def main():
     parser.add_argument(
         "--video-dir",
         type=str,
-        default=os.path.join(os.path.dirname(os.path.dirname(__file__)), "videos"),
+        default=os.path.join(_PROJECT_ROOT, "videos"),
         help="Directory containing video files",
     )
     parser.add_argument(
         "--frames-dir",
         type=str,
-        default=os.path.join(os.path.dirname(os.path.dirname(__file__)), "frames"),
+        default=os.path.join(_PROJECT_ROOT, "frames"),
         help="Directory containing extracted frames",
     )
     parser.add_argument(
         "--output",
         type=str,
-        default=os.path.join(os.path.dirname(__file__), "datasets", "bootstrap"),
+        default=os.path.join(_SCRIPT_DIR, "datasets", "bootstrap"),
         help="Output directory for bootstrap dataset",
     )
     parser.add_argument(
@@ -416,7 +424,7 @@ def main():
             shutil.rmtree(temp_dir)
 
     # Step 4: Create dataset.yaml
-    yaml_path = os.path.join(os.path.dirname(__file__), "dataset_bootstrap.yaml")
+    yaml_path = os.path.join(args.output, "dataset.yaml")
     create_dataset_yaml(args.output, yaml_path)
 
     print("\n" + "=" * 60)

@@ -20,11 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Construction equipment class mapping for fine-tuned models
 CONSTRUCTION_CLASSES = {
-    0: 'excavator',
+    0: 'heavy_equipment',
     1: 'dump_truck',
-    2: 'wheel_loader',
-    3: 'crane',
-    4: 'bulldozer',
+    2: 'vehicle',
 }
 
 
